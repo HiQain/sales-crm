@@ -25,9 +25,51 @@ export interface Lead {
   response: string;
   follow_up: string;
   lead_value: number;
-  lead_owner: string;
+  lead: string;
   lead_status: LeadStatus;
   payment_date: string;
   payment_amount: number;
+  created_at?: string;
+  updated_at?: string;
   assigned_user?: User;
+}
+
+export interface ClientJourney {
+  id: number;
+  lead_id: number;
+  record_date: string;
+  client_name: string;
+  business_name: string;
+  credit_card_info: string;
+  email: string;
+  phone: string;
+  sales: string;
+  lead: string;
+  service: string;
+  status: LeadStatus;
+  paid: number;
+  balance: number;
+  total: number;
+  created_at?: string;
+  updated_at?: string;
+  assigned_user?: User | number;
+}
+
+export type SalesRecord = ClientJourney;
+
+export interface Billing {
+  id: number;
+  invoice_date: string;
+  payment_received_date: string;
+  client_name: string;
+  business_name: string;
+  payment_method: string;
+  service: string;
+  amount: number;
+  fee_deduction: number;
+  net_currency: number;
+  lead: string;
+  created_at?: string;
+  updated_at?: string;
+  assigned_user?: User | number;
 }

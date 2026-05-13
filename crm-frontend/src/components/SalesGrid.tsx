@@ -85,7 +85,7 @@ export default function SalesGrid() {
     { field: 'ns', headerName: 'NS', width: 80, editable: true },
     { field: 'businessOwner', headerName: 'Business Owner', minWidth: 150, editable: true },
     { field: 'businessName', headerName: 'Business Name', minWidth: 180, editable: true },
-    { field: 'service', headerName: 'Service', minWidth: 120, editable: true },
+    { field: 'service', headerName: 'Service', minWidth: 120, editable: true, filter: true },
     { 
       field: 'response', 
       headerName: 'Response', 
@@ -113,6 +113,7 @@ export default function SalesGrid() {
       headerName: 'Lead (Owner)', 
       width: 140, 
       editable: true,
+      filter: true,
       cellEditor: 'agSelectCellEditor',
       cellEditorParams: {
         values: ['Sameer', 'Rehan', 'Admin']
@@ -225,7 +226,7 @@ export default function SalesGrid() {
             quickFilterText={searchText}
             defaultColDef={{
               sortable: true,
-              filter: true,
+              filter: false,
               resizable: true,
               flex: 1,
               minWidth: 100,

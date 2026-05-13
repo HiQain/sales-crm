@@ -5,6 +5,7 @@ import {
   LogOut, 
   User as UserIcon,
   Briefcase,
+  CreditCard,
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
@@ -30,11 +31,15 @@ export default function Sidebar({ role }: SidebarProps) {
 
   const adminLinks = [
     { to: '/admin/leads', icon: Table, label: 'Leads' },
+    { to: '/admin/client-journeys', icon: Briefcase, label: 'Client Journey' },
+    { to: '/admin/billings', icon: CreditCard, label: 'Billings' },
     { to: '/admin/users', icon: Users, label: 'Users' },
   ];
 
   const employeeLinks = [
     { to: '/employee/leads', icon: Briefcase, label: 'My Leads' },
+    { to: '/employee/client-journeys', icon: Table, label: 'My Clients' },
+    { to: '/employee/billings', icon: CreditCard, label: 'My Billings' },
   ];
 
   const links = role === 'admin' ? adminLinks : employeeLinks;

@@ -113,39 +113,6 @@ export default function Login() {
             >
               {loading ? <Loader2 className="animate-spin" size={20} /> : 'Sign In'}
             </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                localStorage.setItem('jwt', 'demo-bypass-token');
-                localStorage.setItem('user', JSON.stringify({
-                  id: 999,
-                  username: 'DemoAdmin',
-                  email: 'demo@example.com',
-                  role: { type: 'admin', name: 'Admin' }
-                }));
-                navigate('/admin/leads');
-              }}
-              className="w-full bg-white/10 hover:bg-white/20 text-slate-700 font-bold py-3 rounded-xl border border-white/30 transition-all flex items-center justify-center gap-2 group active:scale-[0.98]"
-            >
-              🚀 Explore as Admin (Demo Mode)
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                localStorage.setItem('jwt', 'demo-bypass-token');
-                localStorage.setItem('user', JSON.stringify({
-                  id: 888,
-                  username: 'DemoEmployee',
-                  email: 'employee@example.com',
-                  role: { type: 'employee', name: 'Employee' }
-                }));
-                navigate('/employee/leads');
-              }}
-              className="w-full bg-slate-700/10 hover:bg-slate-700/20 text-slate-600 font-bold py-2 rounded-xl border border-slate-700/20 transition-all text-xs"
-            >
-              Explore as Employee
-            </button>
           </div>
         </form>
 

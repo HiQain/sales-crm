@@ -14,13 +14,18 @@ import {
   themeQuartz,
 } from 'ag-grid-community';
 import apiClient from '../../api/client';
-import { Loader2, Plus, Search, Trash2, TrendingUp, CheckCircle, Clock, Table } from 'lucide-react';
+import { Loader2, Search, Trash2, TrendingUp, CheckCircle, Clock, Table } from 'lucide-react';
 import { Lead } from '../../types';
+import ConfirmDialog from '../../components/ConfirmDialog';
+import LeadDateFilter from '../../components/LeadDateFilter';
+import { filterLeadsByDate, type LeadDateFilter as LeadDateFilterValue } from '../../utils/leadDateFilter';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
+type GridLead = Lead & { __isDraft?: boolean };
+
 const glassTheme = themeQuartz.withParams({
-  backgroundColor: 'rgba(255, 255, 255, 0.4)',
+  backgroundColor: 'rgba(255, 255, 255)',
   headerBackgroundColor: 'rgba(0, 0, 0, 0.05)',
   headerTextColor: 'oklch(37.2% 0.044 257.287)', // slate-700
   headerFontWeight: 'bold',
@@ -48,10 +53,36 @@ const StatusBadge = (params: ICellRendererParams) => {
   );
 };
 
+const createEmptyLead = (): GridLead => ({
+  id: -1,
+  contact: '',
+  email: '',
+  ns: '',
+  business_owner: '',
+  business_name: '',
+  service: '',
+  response: '',
+  follow_up: '',
+  lead_value: 0,
+  lead: '',
+  lead_status: 'pending',
+  payment_date: '',
+  payment_amount: 0,
+  __isDraft: true,
+});
+
+const dividerStyle = {
+  borderRight: '1px solid rgba(148, 163, 184, 0.45)',
+};
+
 export default function MyLeadsPage() {
-  const [rowData, setRowData] = useState<Lead[]>([]);
+  const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
+  const [dateFilter, setDateFilter] = useState<LeadDateFilterValue>('all');
+  const [draftRow, setDraftRow] = useState<GridLead>(createEmptyLead);
+  const [leadPendingDelete, setLeadPendingDelete] = useState<number | string | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const user = useMemo(() => {
     const userStr = localStorage.getItem('user');
@@ -63,7 +94,7 @@ export default function MyLeadsPage() {
     setLoading(true);
     try {
       const response = await apiClient.get(`/leads?userId=${user.id}`);
-      const leads = Array.isArray(response.data) ? response.data : response.data.data || [];
+      const leads = (Array.isArray(response.data) ? response.data : response.data.data || []) as GridLead[];
       setRowData(leads);
     } catch (error) {
       console.error('Failed to fetch my leads:', error);
@@ -86,60 +117,112 @@ export default function MyLeadsPage() {
     return isNaN(val) ? params.oldValue : val;
   };
 
-  const deleteLead = useCallback(async (id: number | string) => {
-    if (!window.confirm('Are you sure you want to delete this lead?')) return;
+  const deleteLead = useCallback(async () => {
+    if (leadPendingDelete == null) return;
+    setDeleteLoading(true);
     try {
-      await apiClient.delete(`/leads/${id}`);
-      setRowData(prev => prev.filter(l => l.id !== id));
+      await apiClient.delete(`/leads/${leadPendingDelete}`);
+      setRowData(prev => prev.filter(l => l.id !== leadPendingDelete));
+      setLeadPendingDelete(null);
     } catch (error) {
       console.error('Delete failed:', error);
+    } finally {
+      setDeleteLoading(false);
     }
-  }, []);
+  }, [leadPendingDelete]);
 
-  const columnDefs = useMemo<ColDef[]>(() => [
-    { field: 'contact', headerName: 'Contact', minWidth: 150, editable: true },
-    { field: 'email', headerName: 'Email', minWidth: 200, editable: true },
-    { field: 'business_name', headerName: 'Business Name', minWidth: 180, editable: true },
-    { field: 'service', headerName: 'Service', minWidth: 120, editable: true },
-    {
-      field: 'response',
-      headerName: 'Response',
-      minWidth: 250,
-      editable: true,
-      cellEditor: 'agLargeTextCellEditor',
-      cellEditorPopup: true,
-      cellClass: 'italic text-slate-500'
-    },
-    { field: 'follow_up', headerName: 'Follow Up', minWidth: 180, editable: true, cellEditor: 'agLargeTextCellEditor' },
-    { field: 'lead_value', headerName: 'Value', minWidth: 180, editable: true, valueParser: numberParser, valueFormatter: currencyFormatter, cellClass: 'text-right font-mono font-bold' },
-    {
-      field: 'lead_status',
-      headerName: 'Status',
-      minWidth: 180,
-      editable: true,
-      cellRenderer: StatusBadge,
-      cellEditor: 'agSelectCellEditor',
-      cellEditorParams: { values: ['pending', 'contacted', 'paid', 'failed'] }
-    },
-    {
-      headerName: 'Actions',
-      width: 100,
-      pinned: 'right',
-      cellRenderer: (params: ICellRendererParams) => (
-        <button
-          onClick={() => deleteLead(params.data.id)}
-          className="p-1 hover:bg-rose-500/20 text-rose-500 rounded transition-colors mt-1"
-        >
-          <Trash2 size={16} />
-        </button>
-      )
-    }
-  ], [deleteLead]);
+  const columnDefs = useMemo<ColDef<GridLead>[]>(() => {
+    const columns: ColDef<GridLead>[] = [
+      { field: 'contact', headerName: 'Contact', minWidth: 120, editable: true },
+      { field: 'email', headerName: 'Email', minWidth: 120, editable: true },
+      { field: 'business_name', headerName: 'Business Name', minWidth: 150, editable: true },
+      { field: 'service', headerName: 'Service', minWidth: 120, editable: true, filter: true },
+      {
+        field: 'response',
+        headerName: 'Response',
+        minWidth: 250,
+        editable: true,
+        cellEditor: 'agLargeTextCellEditor',
+        cellEditorPopup: true,
+        cellClass: 'italic text-slate-500'
+      },
+      { field: 'follow_up', headerName: 'Follow Up', minWidth: 180, editable: true, cellEditor: 'agLargeTextCellEditor' },
+      { field: 'lead_value', headerName: 'Value', minWidth: 180, editable: true, valueParser: numberParser, valueFormatter: currencyFormatter, cellClass: 'text-right font-mono font-bold' },
+      {
+        field: 'lead_status',
+        headerName: 'Status',
+        minWidth: 180,
+        editable: true,
+        cellRenderer: StatusBadge,
+        cellEditor: 'agSelectCellEditor',
+        cellEditorParams: { values: ['pending', 'contacted', 'paid', 'failed'] }
+      },
+      {
+        headerName: 'Actions',
+        width: 100,
+        pinned: 'right',
+        cellRenderer: (params: ICellRendererParams) => (
+          params.node.rowPinned === 'bottom' ? null : (
+          <button
+            onClick={() => setLeadPendingDelete(params.data.id)}
+            className="p-1 hover:bg-rose-500/20 text-rose-500 rounded transition-colors mt-1"
+          >
+            <Trash2 size={16} />
+          </button>
+          )
+        )
+      }
+    ];
+
+    return columns.map((column, index) => ({
+      ...column,
+      cellStyle: index === columns.length - 1 ? undefined : dividerStyle,
+      headerStyle: index === columns.length - 1 ? undefined : dividerStyle,
+    }));
+  }, [deleteLead]);
 
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
-    const { data, colDef, newValue } = event;
+    if (!user) return;
+
+    const { data, colDef, newValue, node } = event;
     const field = colDef.field;
     if (!field) return;
+
+    const hasValue = !(newValue == null || (typeof newValue === 'string' && newValue.trim() === ''));
+    if (node.rowPinned === 'bottom') {
+      if (!hasValue) {
+        setDraftRow(prev => ({ ...prev, [field]: newValue }));
+        return;
+      }
+
+      const nextDraft = { ...draftRow, [field]: newValue };
+      setDraftRow(createEmptyLead());
+
+      try {
+        await apiClient.post('/leads', {
+          contact: nextDraft.contact || 'New Lead',
+          email: nextDraft.email,
+          business_owner: nextDraft.business_owner,
+          business_name: nextDraft.business_name,
+          service: nextDraft.service,
+          response: nextDraft.response,
+          follow_up: nextDraft.follow_up,
+          lead_value: nextDraft.lead_value,
+          lead: nextDraft.lead,
+          lead_status: nextDraft.lead_status || 'pending',
+          assigned_user: Number(user.id)
+        });
+        fetchData();
+      } catch (error) {
+        console.error('Create failed:', error);
+        setDraftRow(nextDraft);
+      }
+      return;
+    }
+
+    setRowData(prev => prev.map(row => (
+      row.id === data.id ? { ...row, [field]: newValue } : row
+    )));
 
     try {
       await apiClient.put(`/leads/${data.id}`, {
@@ -149,39 +232,42 @@ export default function MyLeadsPage() {
       console.error('Update failed:', error);
       fetchData();
     }
-  }, [fetchData]);
+  }, [draftRow, fetchData, user]);
 
-  const handleCreateLead = async () => {
-    if (!user) return;
-    setLoading(true);
-    try {
-      await apiClient.post('/leads', {
-        contact: 'New Lead',
-        email: 'customer@example.com',
-        business_name: 'Unknown Co',
-        service: 'General',
-        response: 'none',
-        follow_up: "Follow Up",
-        lead_value: 0,
-        lead_status: 'pending',
-        assigned_user: user.id
-      });
-      fetchData();
-    } catch (error) {
-      console.error('Creation failed:', error);
-      setLoading(false);
+  const filteredRowData = useMemo(() => filterLeadsByDate(rowData, dateFilter), [rowData, dateFilter]);
+  const pinnedBottomRowData = useMemo(() => [draftRow], [draftRow]);
+
+  const getRowStyle = useCallback((params: RowClassParams<GridLead>) => {
+    if (params.node.rowPinned === 'bottom') {
+      return { backgroundColor: 'rgba(255, 255, 255, 0.35)' };
     }
-  };
+    if (params.data?.lead_status === 'paid') {
+      return { backgroundColor: 'oklch(72.3% 0.219 149.579 / 0.1)' };
+    }
+    return undefined;
+  }, []);
 
   const stats = useMemo(() => {
-    const total = rowData.length;
-    const paid = rowData.filter(l => l.lead_status === 'paid').length;
-    const totalValue = rowData.reduce((acc, curr) => acc + (Number(curr.lead_value) || 0), 0);
-    return { total, paid, totalValue };
-  }, [rowData]);
+    const total = filteredRowData.length;
+    const paid = filteredRowData.filter(l => l.lead_status === 'paid').length;
+    const totalValue = filteredRowData.reduce((acc, curr) => acc + (Number(curr.lead_value) || 0), 0);
+    const paidValue = filteredRowData
+      .filter(l => l.lead_status === 'paid')
+      .reduce((acc, curr) => acc + (Number(curr.lead_value) || 0), 0);
+    return { total, paid, totalValue, paidValue };
+  }, [filteredRowData]);
 
   return (
     <div className="p-6 h-full flex flex-col space-y-4 animate-in fade-in duration-500">
+      <ConfirmDialog
+        open={leadPendingDelete != null}
+        title="Delete lead?"
+        message="This will permanently remove the lead from the table. You can’t undo this action."
+        confirmLabel="Delete Lead"
+        onConfirm={deleteLead}
+        onCancel={() => !deleteLoading && setLeadPendingDelete(null)}
+        loading={deleteLoading}
+      />
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-2xl font-bold text-slate-700 tracking-tight">My Leads</h2>
@@ -189,6 +275,7 @@ export default function MyLeadsPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-500" size={18} />
             <input
@@ -199,20 +286,14 @@ export default function MyLeadsPage() {
               onChange={(e) => setSearchText(e.target.value)}
             />
           </div>
-          <button
-            onClick={handleCreateLead}
-            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-lg shadow-indigo-600/20 transition-all font-mono tracking-tighter"
-          >
-            <Plus size={18} />
-            Add Lead
-          </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {[
           { label: 'My Leads', val: stats.total, icon: Table, color: 'text-indigo-600' },
           { label: 'Paid Conversion', val: stats.paid, icon: CheckCircle, color: 'text-green-700' },
+          { label: 'Paid Revenue', val: `$${stats.paidValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: CheckCircle, color: 'text-emerald-700' },
           { label: 'Pipeline Value', val: `$${stats.totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: TrendingUp, color: 'text-indigo-700' },
         ].map((stat) => (
           <div key={stat.label} className="bg-white/40 backdrop-blur-[20px] border border-white/30 p-4 rounded-2xl flex items-center gap-4 shadow-sm relative overflow-hidden group">
@@ -236,11 +317,13 @@ export default function MyLeadsPage() {
         )}
         <AgGridReact
           theme={glassTheme}
-          rowData={rowData}
+          rowData={filteredRowData}
+          pinnedBottomRowData={pinnedBottomRowData}
           columnDefs={columnDefs}
           onCellValueChanged={onCellValueChanged}
+          getRowStyle={getRowStyle}
           quickFilterText={searchText}
-          defaultColDef={{ sortable: true, filter: true, resizable: true, flex: 1 }}
+          defaultColDef={{ sortable: true, filter: false, resizable: true, flex: 1 }}
           animateRows={true}
         />
       </div>
