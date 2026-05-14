@@ -52,12 +52,27 @@ const toMoney = (value: unknown) => {
   return Number.isFinite(number) ? number : 0;
 };
 
+const toDateOnly = (value: unknown) => {
+  if (!value) return '';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    const directMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (directMatch) return directMatch[1];
+  }
+
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+};
+
 const withDerivedBillingValues = (billing: GridBilling): GridBilling => {
   const amount = toMoney(billing.amount);
   const feeDeduction = toMoney(billing.fee_deduction);
 
   return {
     ...billing,
+    invoice_date: toDateOnly(billing.invoice_date),
+    payment_received_date: toDateOnly(billing.payment_received_date),
     amount,
     fee_deduction: feeDeduction,
     net_currency: amount - feeDeduction,
@@ -110,7 +125,7 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
       const url = scopedUserId ? `/billings?userId=${scopedUserId}` : '/billings';
       const response = await apiClient.get(url);
       const records = (Array.isArray(response.data) ? response.data : response.data.data || []) as GridBilling[];
-      setRowData(records);
+      setRowData(records.map(withDerivedBillingValues));
     } catch (error) {
       console.error('Failed to fetch billings:', error);
     } finally {
@@ -227,7 +242,7 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
           ...normalizedDraft,
           assigned_user: scopedUserId,
         });
-        setRowData((prev) => [response.data as GridBilling, ...prev]);
+        setRowData((prev) => [withDerivedBillingValues(response.data as GridBilling), ...prev]);
       } catch (error) {
         console.error('Create failed:', error);
         setDraftRow(normalizedDraft);

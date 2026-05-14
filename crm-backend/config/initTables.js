@@ -1,6 +1,5 @@
 import db from './db.js';
-import { buildBillingFromLead } from '../services/billingSync.js';
-import { buildClientJourneyFromLead } from '../services/salesRecordSync.js';
+import { buildClientJourneyFromBilling } from '../services/billingSync.js';
 
 export const ensureTables = async () => {
   const [leadOwnerColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'lead_owner'`);
@@ -18,7 +17,8 @@ export const ensureTables = async () => {
   await db.execute(`
     CREATE TABLE IF NOT EXISTS client_journeys (
       id INT AUTO_INCREMENT PRIMARY KEY,
-      lead_id INT NOT NULL,
+      lead_id INT NULL,
+      billing_id INT NULL,
       record_date DATE NULL,
       client_name VARCHAR(255) NOT NULL DEFAULT '',
       business_name VARCHAR(255) NOT NULL DEFAULT '',
@@ -37,6 +37,7 @@ export const ensureTables = async () => {
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       INDEX idx_client_journeys_lead_id (lead_id),
+      INDEX idx_client_journeys_billing_id (billing_id),
       INDEX idx_client_journeys_assigned_user (assigned_user),
       INDEX idx_client_journeys_status (status),
       INDEX idx_client_journeys_record_date (record_date)
@@ -48,55 +49,15 @@ export const ensureTables = async () => {
     await db.execute('ALTER TABLE client_journeys CHANGE COLUMN lead_label `lead` VARCHAR(255) NOT NULL DEFAULT \'\'');
   }
 
-  const [leadsWithoutJourneys] = await db.execute(`
-    SELECT l.*, u.username AS assigned_username
-    FROM leads l
-    LEFT JOIN users u ON u.id = l.assigned_user
-    LEFT JOIN client_journeys cj ON cj.lead_id = l.id
-    WHERE cj.id IS NULL
-  `);
-
-  for (const lead of leadsWithoutJourneys) {
-    const clientJourney = buildClientJourneyFromLead(lead);
-    await db.execute(`
-      INSERT INTO client_journeys
-      (lead_id, record_date, client_name, business_name, credit_card_info, email, phone,
-       sales, \`lead\`, service, status, paid, balance, total, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      lead.id,
-      clientJourney.record_date,
-      clientJourney.client_name,
-      clientJourney.business_name,
-      clientJourney.credit_card_info,
-      clientJourney.email,
-      clientJourney.phone,
-      clientJourney.sales,
-      clientJourney.lead,
-      clientJourney.service,
-      clientJourney.status,
-      clientJourney.paid,
-      clientJourney.balance,
-      clientJourney.total,
-      clientJourney.assigned_user,
-      lead.created_by || lead.assigned_user || null,
-    ]);
+  const [clientJourneyBillingIdColumn] = await db.execute(`SHOW COLUMNS FROM client_journeys LIKE 'billing_id'`);
+  if (clientJourneyBillingIdColumn.length === 0) {
+    await db.execute('ALTER TABLE client_journeys ADD COLUMN billing_id INT NULL AFTER lead_id');
+    await db.execute('ALTER TABLE client_journeys ADD INDEX idx_client_journeys_billing_id (billing_id)');
   }
 
-  const [journeysNeedingLeadColumnSync] = await db.execute(`
-    SELECT cj.id, l.\`lead\` AS lead_name, u.username AS assigned_username
-    FROM client_journeys cj
-    LEFT JOIN leads l ON l.id = cj.lead_id
-    LEFT JOIN users u ON u.id = l.assigned_user
-    WHERE cj.sales <> '' OR cj.\`lead\` = '' OR cj.\`lead\` IS NULL
-  `);
-
-  for (const journey of journeysNeedingLeadColumnSync) {
-    const leadLabel = journey.lead_name || journey.assigned_username || '';
-    await db.execute(
-      'UPDATE client_journeys SET sales = ?, `lead` = ? WHERE id = ?',
-      ['', leadLabel, journey.id],
-    );
+  const [clientJourneyLeadColumnInfo] = await db.execute(`SHOW COLUMNS FROM client_journeys LIKE 'lead_id'`);
+  if (clientJourneyLeadColumnInfo.length > 0 && clientJourneyLeadColumnInfo[0].Null === 'NO') {
+    await db.execute('ALTER TABLE client_journeys MODIFY COLUMN lead_id INT NULL');
   }
 
   await db.execute(`
@@ -135,37 +96,6 @@ export const ensureTables = async () => {
     await db.execute('ALTER TABLE billings CHANGE COLUMN agent `lead` VARCHAR(255) NOT NULL DEFAULT \'\'');
   }
 
-  const [paidLeadsWithoutBilling] = await db.execute(`
-    SELECT l.*
-    FROM leads l
-    LEFT JOIN billings b ON b.lead_id = l.id
-    WHERE l.lead_status = 'paid' AND b.id IS NULL
-  `);
-
-  for (const lead of paidLeadsWithoutBilling) {
-    const billing = buildBillingFromLead(lead);
-    await db.execute(`
-      INSERT INTO billings
-      (lead_id, invoice_date, payment_received_date, client_name, business_name, payment_method,
-       service, amount, fee_deduction, net_currency, \`lead\`, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      lead.id,
-      billing.invoice_date,
-      billing.payment_received_date,
-      billing.client_name,
-      billing.business_name,
-      billing.payment_method,
-      billing.service,
-      billing.amount,
-      billing.fee_deduction,
-      billing.net_currency,
-      billing.lead,
-      billing.assigned_user,
-      lead.created_by || lead.assigned_user || null,
-    ]);
-  }
-
   const [billingsMissingClientName] = await db.execute(`
     SELECT b.id, l.contact, l.business_owner
     FROM billings b
@@ -181,5 +111,40 @@ export const ensureTables = async () => {
       'UPDATE billings SET client_name = ? WHERE id = ?',
       [clientName, billing.id],
     );
+  }
+
+  const [billingsWithoutJourneys] = await db.execute(`
+    SELECT b.*
+    FROM billings b
+    LEFT JOIN client_journeys cj ON cj.billing_id = b.id
+    WHERE cj.id IS NULL
+  `);
+
+  for (const billing of billingsWithoutJourneys) {
+    const clientJourney = buildClientJourneyFromBilling(billing);
+    await db.execute(`
+      INSERT INTO client_journeys
+      (lead_id, billing_id, record_date, client_name, business_name, credit_card_info, email, phone,
+       sales, \`lead\`, service, status, paid, balance, total, assigned_user, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      null,
+      billing.id,
+      clientJourney.record_date,
+      clientJourney.client_name,
+      clientJourney.business_name,
+      clientJourney.credit_card_info,
+      clientJourney.email,
+      clientJourney.phone,
+      clientJourney.sales,
+      clientJourney.lead,
+      clientJourney.service,
+      clientJourney.status,
+      clientJourney.paid,
+      clientJourney.balance,
+      clientJourney.total,
+      clientJourney.assigned_user,
+      billing.created_by || billing.assigned_user || null,
+    ]);
   }
 };

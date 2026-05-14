@@ -1,4 +1,5 @@
 import db from '../config/db.js';
+import { buildClientJourneyFromBilling } from '../services/billingSync.js';
 
 const BILLING_FIELDS = [
   'invoice_date',
@@ -31,6 +32,31 @@ const toMoney = (value) => {
   return Number.isFinite(number) ? number : 0;
 };
 
+const toDateOnly = (value) => {
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    const directMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (directMatch) {
+      return directMatch[1];
+    }
+
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString().slice(0, 10);
+    }
+  }
+
+  return null;
+};
+
 const quoteColumn = (column) => `\`${column}\``;
 
 const normalizeBillingPayload = (payload, currentBilling = {}) => {
@@ -46,6 +72,14 @@ const normalizeBillingPayload = (payload, currentBilling = {}) => {
     normalized.fee_deduction = toMoney(normalized.fee_deduction);
   }
 
+  if ('invoice_date' in normalized) {
+    normalized.invoice_date = toDateOnly(normalized.invoice_date);
+  }
+
+  if ('payment_received_date' in normalized) {
+    normalized.payment_received_date = toDateOnly(normalized.payment_received_date);
+  }
+
   if ('net_currency' in normalized) {
     normalized.net_currency = toMoney(normalized.net_currency);
   } else if (hasAmount || hasFee) {
@@ -55,6 +89,71 @@ const normalizeBillingPayload = (payload, currentBilling = {}) => {
   }
 
   return normalized;
+};
+
+const serializeBilling = (billing) => ({
+  ...billing,
+  invoice_date: toDateOnly(billing.invoice_date) || '',
+  payment_received_date: toDateOnly(billing.payment_received_date) || '',
+});
+
+const syncClientJourneyFromBilling = async (connection, billing) => {
+  const journey = buildClientJourneyFromBilling(billing);
+  const [existingJourneys] = await connection.execute(
+    'SELECT id FROM client_journeys WHERE billing_id = ? LIMIT 1',
+    [billing.id],
+  );
+
+  if (existingJourneys.length > 0) {
+    await connection.execute(`
+      UPDATE client_journeys
+      SET record_date = ?, client_name = ?, business_name = ?, credit_card_info = ?, email = ?, phone = ?,
+          sales = ?, \`lead\` = ?, service = ?, status = ?, paid = ?, balance = ?, total = ?, assigned_user = ?
+      WHERE billing_id = ?
+    `, [
+      journey.record_date,
+      journey.client_name,
+      journey.business_name,
+      journey.credit_card_info,
+      journey.email,
+      journey.phone,
+      journey.sales,
+      journey.lead,
+      journey.service,
+      journey.status,
+      journey.paid,
+      journey.balance,
+      journey.total,
+      journey.assigned_user,
+      billing.id,
+    ]);
+    return;
+  }
+
+  await connection.execute(`
+    INSERT INTO client_journeys
+    (lead_id, billing_id, record_date, client_name, business_name, credit_card_info, email, phone,
+     sales, \`lead\`, service, status, paid, balance, total, assigned_user, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    null,
+    billing.id,
+    journey.record_date,
+    journey.client_name,
+    journey.business_name,
+    journey.credit_card_info,
+    journey.email,
+    journey.phone,
+    journey.sales,
+    journey.lead,
+    journey.service,
+    journey.status,
+    journey.paid,
+    journey.balance,
+    journey.total,
+    journey.assigned_user,
+    billing.created_by || billing.assigned_user || null,
+  ]);
 };
 
 export const getBillings = async (req, res) => {
@@ -72,7 +171,7 @@ export const getBillings = async (req, res) => {
     query += ' ORDER BY COALESCE(invoice_date, created_at) DESC, id DESC';
 
     const [billings] = await db.execute(query, params);
-    res.json(billings);
+    res.json(billings.map(serializeBilling));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to fetch billings' } });
@@ -84,9 +183,12 @@ export const createBilling = async (req, res) => {
     ...pickBillingFields(req.body),
     assigned_user: req.body.assigned_user || req.user.id,
   });
+  const connection = await db.getConnection();
 
   try {
-    const [result] = await db.execute(`
+    await connection.beginTransaction();
+
+    const [result] = await connection.execute(`
       INSERT INTO billings
       (invoice_date, payment_received_date, client_name, business_name, payment_method,
        service, amount, fee_deduction, net_currency, \`lead\`, assigned_user, created_by)
@@ -106,13 +208,24 @@ export const createBilling = async (req, res) => {
       req.user.id,
     ]);
 
-    res.status(201).json({
+    await syncClientJourneyFromBilling(connection, {
       id: result.insertId,
       ...payload,
+      created_by: req.user.id,
+    });
+
+    await connection.commit();
+
+    res.status(201).json({
+      id: result.insertId,
+      ...serializeBilling(payload),
     });
   } catch (err) {
+    await connection.rollback();
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to create billing' } });
+  } finally {
+    connection.release();
   }
 };
 
@@ -124,34 +237,60 @@ export const updateBilling = async (req, res) => {
     return res.status(400).json({ error: { message: 'No fields to update' } });
   }
 
+  const connection = await db.getConnection();
+
   try {
-    const [rows] = await db.execute('SELECT amount, fee_deduction, net_currency FROM billings WHERE id = ? LIMIT 1', [id]);
+    await connection.beginTransaction();
+
+    const [rows] = await connection.execute(
+      'SELECT * FROM billings WHERE id = ? LIMIT 1',
+      [id]
+    );
     if (rows.length === 0) {
+      await connection.rollback();
       return res.status(404).json({ error: { message: 'Billing not found' } });
     }
 
     const updates = normalizeBillingPayload(rawUpdates, rows[0]);
     const setClause = Object.keys(updates).map((key) => `${quoteColumn(key)} = ?`).join(', ');
-    await db.execute(
+    await connection.execute(
       `UPDATE billings SET ${setClause} WHERE id = ?`,
       [...Object.values(updates), id],
     );
 
+    await syncClientJourneyFromBilling(connection, {
+      ...rows[0],
+      ...updates,
+      id: Number(id),
+    });
+
+    await connection.commit();
+
     res.json({ message: 'Billing updated successfully' });
   } catch (err) {
+    await connection.rollback();
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to update billing' } });
+  } finally {
+    connection.release();
   }
 };
 
 export const deleteBilling = async (req, res) => {
   const { id } = req.params;
+  const connection = await db.getConnection();
 
   try {
-    await db.execute('DELETE FROM billings WHERE id = ?', [id]);
+    await connection.beginTransaction();
+    await connection.execute('DELETE FROM client_journeys WHERE billing_id = ?', [id]);
+    await connection.execute('DELETE FROM billings WHERE id = ?', [id]);
+    await connection.commit();
     res.json({ message: 'Billing deleted successfully' });
   } catch (err) {
+    await connection.rollback();
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to delete billing' } });
+  } finally {
+    connection.release();
   }
 };

@@ -36,7 +36,8 @@ export interface Lead {
 
 export interface ClientJourney {
   id: number;
-  lead_id: number;
+  lead_id: number | null;
+  billing_id?: number | null;
   record_date: string;
   client_name: string;
   business_name: string;

@@ -51,12 +51,26 @@ const toMoney = (value: unknown) => {
   return Number.isFinite(number) ? number : 0;
 };
 
+const toDateOnly = (value: unknown) => {
+  if (!value) return '';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+    const directMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (directMatch) return directMatch[1];
+  }
+
+  const parsed = new Date(String(value));
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().slice(0, 10);
+};
+
 const withDerivedJourneyValues = (record: GridClientJourney): GridClientJourney => {
   const total = toMoney(record.total);
   const paid = toMoney(record.paid);
 
   return {
     ...record,
+    record_date: toDateOnly(record.record_date),
     total,
     paid,
     balance: Math.max(total - paid, 0),
@@ -65,7 +79,8 @@ const withDerivedJourneyValues = (record: GridClientJourney): GridClientJourney 
 
 const createEmptyClientJourney = (): GridClientJourney => ({
   id: -1,
-  lead_id: -1,
+  lead_id: null,
+  billing_id: null,
   record_date: '',
   client_name: '',
   business_name: '',
@@ -113,7 +128,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
       const url = scopedUserId ? `/client-journeys?userId=${scopedUserId}` : '/client-journeys';
       const response = await apiClient.get(url);
       const records = (Array.isArray(response.data) ? response.data : response.data.data || []) as GridClientJourney[];
-      setRowData(records);
+      setRowData(records.map(withDerivedJourneyValues));
     } catch (error) {
       console.error('Failed to fetch client journeys:', error);
     } finally {
@@ -240,7 +255,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
           ...normalizedDraft,
           assigned_user: scopedUserId,
         });
-        setRowData((prev) => [response.data as GridClientJourney, ...prev]);
+        setRowData((prev) => [withDerivedJourneyValues(response.data as GridClientJourney), ...prev]);
       } catch (error) {
         console.error('Create failed:', error);
         setDraftRow(normalizedDraft);
@@ -294,7 +309,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
       <ConfirmDialog
         open={recordPendingDelete != null}
         title="Delete client journey?"
-        message="This will remove the client journey and its linked lead. You can't undo this action."
+        message="This will remove the client journey permanently. You can't undo this action."
         confirmLabel="Delete Journey"
         onConfirm={deleteRecord}
         onCancel={() => !deleteLoading && setRecordPendingDelete(null)}

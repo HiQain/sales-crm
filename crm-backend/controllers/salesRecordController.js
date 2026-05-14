@@ -1,9 +1,4 @@
 import db from '../config/db.js';
-import {
-  buildClientJourneyFromLead,
-  buildLeadFromSalesPayload,
-  mapSalesRecordUpdatesToLead,
-} from '../services/salesRecordSync.js';
 
 const CLIENT_JOURNEYS_TABLE = 'client_journeys';
 
@@ -41,6 +36,31 @@ const toMoney = (value) => {
   return Number.isFinite(number) ? number : 0;
 };
 
+const toDateOnly = (value) => {
+  if (!value) return null;
+
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    const directMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (directMatch) {
+      return directMatch[1];
+    }
+
+    const parsed = new Date(trimmed);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString().slice(0, 10);
+    }
+  }
+
+  return null;
+};
+
 const quoteColumn = (column) => `\`${column}\``;
 
 const normalizeClientJourneyPayload = (payload, currentRecord = {}) => {
@@ -56,6 +76,10 @@ const normalizeClientJourneyPayload = (payload, currentRecord = {}) => {
     normalized.paid = toMoney(normalized.paid);
   }
 
+  if ('record_date' in normalized) {
+    normalized.record_date = toDateOnly(normalized.record_date);
+  }
+
   if ('balance' in normalized) {
     normalized.balance = toMoney(normalized.balance);
   } else if (hasTotal || hasPaid) {
@@ -67,11 +91,16 @@ const normalizeClientJourneyPayload = (payload, currentRecord = {}) => {
   return normalized;
 };
 
+const serializeClientJourney = (record) => ({
+  ...record,
+  record_date: toDateOnly(record.record_date) || '',
+});
+
 export const getSalesRecords = async (req, res) => {
   const { userId } = req.query;
 
   try {
-    let query = `SELECT id, lead_id, record_date, client_name, business_name, credit_card_info, email, phone, sales, \`lead\`, service, status, paid, balance, total, assigned_user, created_by, created_at, updated_at FROM ${CLIENT_JOURNEYS_TABLE} WHERE 1=1`;
+    let query = `SELECT id, lead_id, billing_id, record_date, client_name, business_name, credit_card_info, email, phone, sales, \`lead\`, service, status, paid, balance, total, assigned_user, created_by, created_at, updated_at FROM ${CLIENT_JOURNEYS_TABLE} WHERE 1=1`;
     const params = [];
 
     if (userId) {
@@ -82,7 +111,7 @@ export const getSalesRecords = async (req, res) => {
     query += ' ORDER BY COALESCE(record_date, created_at) DESC, id DESC';
 
     const [records] = await db.execute(query, params);
-    res.json(records);
+    res.json(records.map(serializeClientJourney));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to fetch client journeys' } });
@@ -95,41 +124,15 @@ export const createSalesRecord = async (req, res) => {
     assigned_user: req.body.assigned_user || req.user.id,
   });
 
-  const leadPayload = buildLeadFromSalesPayload(payload);
-  const connection = await db.getConnection();
-
   try {
-    await connection.beginTransaction();
-
-    const [leadResult] = await connection.execute(`
-      INSERT INTO leads
-      (contact, email, business_owner, business_name, service, response, follow_up,
-       lead_value, \`lead\`, lead_status, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `, [
-      leadPayload.contact || 'New Lead',
-      leadPayload.email || '',
-      leadPayload.business_owner || '',
-      leadPayload.business_name || '',
-      leadPayload.service || '',
-      leadPayload.response || '',
-      leadPayload.follow_up || '',
-      leadPayload.lead_value || 0,
-      leadPayload.lead || '',
-      leadPayload.lead_status || 'pending',
-      leadPayload.assigned_user || req.user.id,
-      req.user.id,
-    ]);
-
-    const leadId = leadResult.insertId;
-
-    const [salesRecordResult] = await connection.execute(`
+    const [salesRecordResult] = await db.execute(`
       INSERT INTO ${CLIENT_JOURNEYS_TABLE}
-      (lead_id, record_date, client_name, business_name, credit_card_info, email, phone,
+      (lead_id, billing_id, record_date, client_name, business_name, credit_card_info, email, phone,
        sales, \`lead\`, service, status, paid, balance, total, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
-      leadId,
+      null,
+      null,
       payload.record_date || null,
       payload.client_name || '',
       payload.business_name || '',
@@ -147,19 +150,15 @@ export const createSalesRecord = async (req, res) => {
       req.user.id,
     ]);
 
-    await connection.commit();
-
     res.status(201).json({
       id: salesRecordResult.insertId,
-      lead_id: leadId,
-      ...payload,
+      lead_id: null,
+      billing_id: null,
+      ...serializeClientJourney(payload),
     });
   } catch (err) {
-    await connection.rollback();
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to create client journey' } });
-  } finally {
-    connection.release();
   }
 };
 
@@ -171,75 +170,39 @@ export const updateSalesRecord = async (req, res) => {
     return res.status(400).json({ error: { message: 'No fields to update' } });
   }
 
-  const connection = await db.getConnection();
-
   try {
-    await connection.beginTransaction();
-
-    const [records] = await connection.execute(
-      `SELECT lead_id, total, paid, balance FROM ${CLIENT_JOURNEYS_TABLE} WHERE id = ? LIMIT 1`,
+    const [records] = await db.execute(
+      `SELECT total, paid, balance FROM ${CLIENT_JOURNEYS_TABLE} WHERE id = ? LIMIT 1`,
       [id]
     );
 
     if (records.length === 0) {
-      await connection.rollback();
       return res.status(404).json({ error: { message: 'Client journey not found' } });
     }
 
     const updates = normalizeClientJourneyPayload(rawUpdates, records[0]);
     const setClause = Object.keys(updates).map(key => `${quoteColumn(key)} = ?`).join(', ');
-    await connection.execute(
+    await db.execute(
       `UPDATE ${CLIENT_JOURNEYS_TABLE} SET ${setClause} WHERE id = ?`,
       [...Object.values(updates), id]
     );
-
-    const leadUpdates = mapSalesRecordUpdatesToLead(updates);
-    if (Object.keys(leadUpdates).length > 0) {
-      const leadSetClause = Object.keys(leadUpdates).map(key => `${quoteColumn(key)} = ?`).join(', ');
-      await connection.execute(
-        `UPDATE leads SET ${leadSetClause} WHERE id = ?`,
-        [...Object.values(leadUpdates), records[0].lead_id]
-      );
-    }
-
-    await connection.commit();
     res.json({ message: 'Client journey updated successfully' });
   } catch (err) {
-    await connection.rollback();
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to update client journey' } });
-  } finally {
-    connection.release();
   }
 };
 
 export const deleteSalesRecord = async (req, res) => {
   const { id } = req.params;
-  const connection = await db.getConnection();
-
   try {
-    await connection.beginTransaction();
-
-    const [records] = await connection.execute(
-      `SELECT lead_id FROM ${CLIENT_JOURNEYS_TABLE} WHERE id = ? LIMIT 1`,
-      [id]
-    );
-
-    if (records.length === 0) {
-      await connection.rollback();
+    const [result] = await db.execute(`DELETE FROM ${CLIENT_JOURNEYS_TABLE} WHERE id = ?`, [id]);
+    if (result.affectedRows === 0) {
       return res.status(404).json({ error: { message: 'Client journey not found' } });
     }
-
-    await connection.execute(`DELETE FROM ${CLIENT_JOURNEYS_TABLE} WHERE id = ?`, [id]);
-    await connection.execute('DELETE FROM leads WHERE id = ?', [records[0].lead_id]);
-
-    await connection.commit();
     res.json({ message: 'Client journey deleted successfully' });
   } catch (err) {
-    await connection.rollback();
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to delete client journey' } });
-  } finally {
-    connection.release();
   }
 };
