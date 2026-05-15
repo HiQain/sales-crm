@@ -16,9 +16,12 @@ import {
 import apiClient from '../../api/client';
 import { Loader2, Search, Trash2, TrendingUp, CheckCircle, Clock, Table } from 'lucide-react';
 import { Lead } from '../../types';
+import ColumnVisibilityMenu, { getColumnVisibilityId } from '../../components/ColumnVisibilityMenu';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LeadDateFilter from '../../components/LeadDateFilter';
 import { filterLeadsByDate, type LeadDateFilter as LeadDateFilterValue } from '../../utils/leadDateFilter';
+import { formatDateDisplay } from '../../utils/date';
+import { normalizeUsPhoneForStorage } from '../../utils/phone';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -74,6 +77,12 @@ const createEmptyLead = (): GridLead => ({
 const dividerStyle = {
   borderRight: '1px solid rgba(148, 163, 184, 0.45)',
 };
+const RESIZE_MIN_WIDTH = 56;
+
+const withNormalizedLead = (lead: GridLead): GridLead => ({
+  ...lead,
+  contact: normalizeUsPhoneForStorage(lead.contact) ?? lead.contact,
+});
 
 export default function LeadsPage({ userId }: { userId?: string }) {
   const [rowData, setRowData] = useState<GridLead[]>([]);
@@ -84,6 +93,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const [draftRow, setDraftRow] = useState<GridLead>(createEmptyLead);
   const [leadPendingDelete, setLeadPendingDelete] = useState<number | string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [visibleColumnIds, setVisibleColumnIds] = useState<string[]>([]);
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -103,7 +113,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       }
       const response = await apiClient.get(url);
       const leads = (Array.isArray(response.data) ? response.data : response.data.data || []) as GridLead[];
-      setRowData(leads);
+      setRowData(leads.map(withNormalizedLead));
     } catch (error) {
       console.error('Failed to fetch leads:', error);
     } finally {
@@ -142,7 +152,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
 
   const columnDefs = useMemo<ColDef<GridLead>[]>(() => {
     const columns: ColDef<GridLead>[] = [
-      { field: 'contact', headerName: 'Contact', minWidth: 120, editable: true },
+      { field: 'contact', headerName: 'Contact', minWidth: 150, editable: true },
       { field: 'email', headerName: 'Email', minWidth: 120, editable: true },
       { field: 'business_owner', headerName: 'Business Owner', minWidth: 150, editable: true },
       { field: 'business_name', headerName: 'Business Name', minWidth: 150, editable: true },
@@ -163,7 +173,8 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         editable: true,
         cellEditor: 'agLargeTextCellEditor',
         cellEditorPopup: true,
-        cellClass: 'italic text-slate-500'
+        cellClass: 'italic text-slate-500',
+        valueFormatter: (params) => formatDateDisplay(params.value) || params.value || '',
       },
       {
         field: 'lead_value',
@@ -193,6 +204,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         cellEditorParams: { values: ['pending', 'contacted', 'paid', 'failed'] }
       },
       {
+        colId: 'actions',
         headerName: 'Actions',
         width: 100,
         pinned: 'right',
@@ -211,29 +223,67 @@ export default function LeadsPage({ userId }: { userId?: string }) {
 
     return columns.map((column, index) => ({
       ...column,
+      minWidth: 'width' in column && column.width ? column.minWidth : RESIZE_MIN_WIDTH,
       cellStyle: index === columns.length - 1 ? undefined : dividerStyle,
       headerStyle: index === columns.length - 1 ? undefined : dividerStyle,
     }));
   }, [employees, deleteLead]);
 
+  const columnVisibilityOptions = useMemo(
+    () => columnDefs.map((column) => ({
+      id: getColumnVisibilityId(column),
+      label: String(column.headerName ?? column.field ?? column.colId ?? 'Column'),
+    })),
+    [columnDefs],
+  );
+
+  useEffect(() => {
+    setVisibleColumnIds((current) => {
+      const nextIds = columnVisibilityOptions.map((column) => column.id);
+      if (current.length === 0) {
+        return nextIds;
+      }
+
+      const retained = current.filter((id) => nextIds.includes(id));
+      const missing = nextIds.filter((id) => !retained.includes(id));
+      return [...retained, ...missing];
+    });
+  }, [columnVisibilityOptions]);
+
+  const visibleColumnDefs = useMemo(() => {
+    const visibleIdSet = new Set(visibleColumnIds);
+    return columnDefs.filter((column) => visibleIdSet.has(getColumnVisibilityId(column)));
+  }, [columnDefs, visibleColumnIds]);
+
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
-    const { data, colDef, newValue, node } = event;
+    const { data, colDef, newValue, oldValue, node } = event;
     const field = colDef.field;
     if (!field) return;
 
-    const hasValue = !(newValue == null || (typeof newValue === 'string' && newValue.trim() === ''));
+    const normalizedValue = field === 'contact'
+      ? normalizeUsPhoneForStorage(newValue)
+      : newValue;
+
+    if (field === 'contact' && normalizedValue === null) {
+      fetchData();
+      return;
+    }
+
+    const nextValue = field === 'contact' ? (normalizedValue ?? oldValue ?? '') : newValue;
+
+    const hasValue = !(nextValue == null || (typeof nextValue === 'string' && nextValue.trim() === ''));
     if (node.rowPinned === 'bottom') {
       if (!hasValue) {
-        setDraftRow(prev => ({ ...prev, [field]: newValue }));
+        setDraftRow(prev => ({ ...prev, [field]: nextValue }));
         return;
       }
 
-      const nextDraft = { ...draftRow, [field]: newValue };
+      const nextDraft = withNormalizedLead({ ...draftRow, [field]: nextValue });
       setDraftRow(createEmptyLead());
 
       try {
         await apiClient.post('/leads', {
-          contact: nextDraft.contact || 'New Lead',
+          contact: nextDraft.contact || '',
           email: nextDraft.email,
           business_owner: nextDraft.business_owner,
           business_name: nextDraft.business_name,
@@ -254,12 +304,12 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     }
 
     setRowData(prev => prev.map(row => (
-      row.id === data.id ? { ...row, [field]: newValue } : row
+      row.id === data.id ? withNormalizedLead({ ...row, [field]: nextValue }) : row
     )));
 
     try {
       await apiClient.put(`/leads/${data.id}`, {
-        [field]: newValue,
+        [field]: nextValue,
       });
     } catch (error) {
       console.error('Update failed:', error);
@@ -307,10 +357,20 @@ export default function LeadsPage({ userId }: { userId?: string }) {
           <h2 className="text-2xl font-bold text-slate-700 tracking-tight">
             {userId ? 'User Leads' : 'Global Leads Database'}
           </h2>
-          <p className="text-slate-500 text-sm">Manage and monitor sales opportunities in real-time.</p>
         </div>
 
         <div className="flex items-center gap-3">
+          <ColumnVisibilityMenu
+            columns={columnVisibilityOptions}
+            visibleColumnIds={visibleColumnIds}
+            onToggle={(columnId) => {
+              setVisibleColumnIds((current) =>
+                current.includes(columnId)
+                  ? current.filter((id) => id !== columnId)
+                  : [...current, columnId]
+              );
+            }}
+          />
           <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-400 transition-colors" size={18} />
@@ -357,12 +417,12 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             theme={glassTheme}
             rowData={filteredRowData}
             pinnedBottomRowData={pinnedBottomRowData}
-            columnDefs={columnDefs}
+            columnDefs={visibleColumnDefs}
             onCellValueChanged={onCellValueChanged}
             getRowStyle={getRowStyle}
             quickFilterText={searchText}
             defaultColDef={{
-              sortable: true,
+              sortable: false,
               filter: false,
               resizable: true,
               flex: 1,

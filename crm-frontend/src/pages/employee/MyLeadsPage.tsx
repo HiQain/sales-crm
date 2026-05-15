@@ -16,9 +16,12 @@ import {
 import apiClient from '../../api/client';
 import { Loader2, Search, Trash2, TrendingUp, CheckCircle, Clock, Table } from 'lucide-react';
 import { Lead } from '../../types';
+import ColumnVisibilityMenu, { getColumnVisibilityId } from '../../components/ColumnVisibilityMenu';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LeadDateFilter from '../../components/LeadDateFilter';
 import { filterLeadsByDate, type LeadDateFilter as LeadDateFilterValue } from '../../utils/leadDateFilter';
+import { formatDateDisplay } from '../../utils/date';
+import { normalizeUsPhoneForStorage } from '../../utils/phone';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -74,6 +77,12 @@ const createEmptyLead = (): GridLead => ({
 const dividerStyle = {
   borderRight: '1px solid rgba(148, 163, 184, 0.45)',
 };
+const RESIZE_MIN_WIDTH = 56;
+
+const withNormalizedLead = (lead: GridLead): GridLead => ({
+  ...lead,
+  contact: normalizeUsPhoneForStorage(lead.contact) ?? lead.contact,
+});
 
 export default function MyLeadsPage() {
   const [rowData, setRowData] = useState<GridLead[]>([]);
@@ -83,6 +92,7 @@ export default function MyLeadsPage() {
   const [draftRow, setDraftRow] = useState<GridLead>(createEmptyLead);
   const [leadPendingDelete, setLeadPendingDelete] = useState<number | string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [visibleColumnIds, setVisibleColumnIds] = useState<string[]>([]);
 
   const user = useMemo(() => {
     const userStr = localStorage.getItem('user');
@@ -95,7 +105,7 @@ export default function MyLeadsPage() {
     try {
       const response = await apiClient.get(`/leads?userId=${user.id}`);
       const leads = (Array.isArray(response.data) ? response.data : response.data.data || []) as GridLead[];
-      setRowData(leads);
+      setRowData(leads.map(withNormalizedLead));
     } catch (error) {
       console.error('Failed to fetch my leads:', error);
     } finally {
@@ -133,7 +143,7 @@ export default function MyLeadsPage() {
 
   const columnDefs = useMemo<ColDef<GridLead>[]>(() => {
     const columns: ColDef<GridLead>[] = [
-      { field: 'contact', headerName: 'Contact', minWidth: 120, editable: true },
+      { field: 'contact', headerName: 'Contact', minWidth: 150, editable: true },
       { field: 'email', headerName: 'Email', minWidth: 120, editable: true },
       { field: 'business_name', headerName: 'Business Name', minWidth: 150, editable: true },
       { field: 'service', headerName: 'Service', minWidth: 120, editable: true, filter: true },
@@ -146,7 +156,14 @@ export default function MyLeadsPage() {
         cellEditorPopup: true,
         cellClass: 'italic text-slate-500'
       },
-      { field: 'follow_up', headerName: 'Follow Up', minWidth: 180, editable: true, cellEditor: 'agLargeTextCellEditor' },
+      {
+        field: 'follow_up',
+        headerName: 'Follow Up',
+        minWidth: 180,
+        editable: true,
+        cellEditor: 'agLargeTextCellEditor',
+        valueFormatter: (params) => formatDateDisplay(params.value) || params.value || '',
+      },
       { field: 'lead_value', headerName: 'Value', minWidth: 180, editable: true, valueParser: numberParser, valueFormatter: currencyFormatter, cellClass: 'text-right font-mono font-bold' },
       {
         field: 'lead_status',
@@ -158,6 +175,7 @@ export default function MyLeadsPage() {
         cellEditorParams: { values: ['pending', 'contacted', 'paid', 'failed'] }
       },
       {
+        colId: 'actions',
         headerName: 'Actions',
         width: 100,
         pinned: 'right',
@@ -176,31 +194,69 @@ export default function MyLeadsPage() {
 
     return columns.map((column, index) => ({
       ...column,
+      minWidth: 'width' in column && column.width ? column.minWidth : RESIZE_MIN_WIDTH,
       cellStyle: index === columns.length - 1 ? undefined : dividerStyle,
       headerStyle: index === columns.length - 1 ? undefined : dividerStyle,
     }));
   }, [deleteLead]);
 
+  const columnVisibilityOptions = useMemo(
+    () => columnDefs.map((column) => ({
+      id: getColumnVisibilityId(column),
+      label: String(column.headerName ?? column.field ?? column.colId ?? 'Column'),
+    })),
+    [columnDefs],
+  );
+
+  useEffect(() => {
+    setVisibleColumnIds((current) => {
+      const nextIds = columnVisibilityOptions.map((column) => column.id);
+      if (current.length === 0) {
+        return nextIds;
+      }
+
+      const retained = current.filter((id) => nextIds.includes(id));
+      const missing = nextIds.filter((id) => !retained.includes(id));
+      return [...retained, ...missing];
+    });
+  }, [columnVisibilityOptions]);
+
+  const visibleColumnDefs = useMemo(() => {
+    const visibleIdSet = new Set(visibleColumnIds);
+    return columnDefs.filter((column) => visibleIdSet.has(getColumnVisibilityId(column)));
+  }, [columnDefs, visibleColumnIds]);
+
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
     if (!user) return;
 
-    const { data, colDef, newValue, node } = event;
+    const { data, colDef, newValue, oldValue, node } = event;
     const field = colDef.field;
     if (!field) return;
 
-    const hasValue = !(newValue == null || (typeof newValue === 'string' && newValue.trim() === ''));
+    const normalizedValue = field === 'contact'
+      ? normalizeUsPhoneForStorage(newValue)
+      : newValue;
+
+    if (field === 'contact' && normalizedValue === null) {
+      fetchData();
+      return;
+    }
+
+    const nextValue = field === 'contact' ? (normalizedValue ?? oldValue ?? '') : newValue;
+
+    const hasValue = !(nextValue == null || (typeof nextValue === 'string' && nextValue.trim() === ''));
     if (node.rowPinned === 'bottom') {
       if (!hasValue) {
-        setDraftRow(prev => ({ ...prev, [field]: newValue }));
+        setDraftRow(prev => ({ ...prev, [field]: nextValue }));
         return;
       }
 
-      const nextDraft = { ...draftRow, [field]: newValue };
+      const nextDraft = withNormalizedLead({ ...draftRow, [field]: nextValue });
       setDraftRow(createEmptyLead());
 
       try {
         await apiClient.post('/leads', {
-          contact: nextDraft.contact || 'New Lead',
+          contact: nextDraft.contact || '',
           email: nextDraft.email,
           business_owner: nextDraft.business_owner,
           business_name: nextDraft.business_name,
@@ -221,12 +277,12 @@ export default function MyLeadsPage() {
     }
 
     setRowData(prev => prev.map(row => (
-      row.id === data.id ? { ...row, [field]: newValue } : row
+      row.id === data.id ? withNormalizedLead({ ...row, [field]: nextValue }) : row
     )));
 
     try {
       await apiClient.put(`/leads/${data.id}`, {
-        [field]: newValue,
+        [field]: nextValue,
       });
     } catch (error) {
       console.error('Update failed:', error);
@@ -271,10 +327,20 @@ export default function MyLeadsPage() {
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-2xl font-bold text-slate-700 tracking-tight">My Leads</h2>
-          <p className="text-slate-500 text-sm">Personal sales pipeline and tracking.</p>
         </div>
 
         <div className="flex items-center gap-3">
+          <ColumnVisibilityMenu
+            columns={columnVisibilityOptions}
+            visibleColumnIds={visibleColumnIds}
+            onToggle={(columnId) => {
+              setVisibleColumnIds((current) =>
+                current.includes(columnId)
+                  ? current.filter((id) => id !== columnId)
+                  : [...current, columnId]
+              );
+            }}
+          />
           <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-500" size={18} />
@@ -319,11 +385,11 @@ export default function MyLeadsPage() {
           theme={glassTheme}
           rowData={filteredRowData}
           pinnedBottomRowData={pinnedBottomRowData}
-          columnDefs={columnDefs}
+          columnDefs={visibleColumnDefs}
           onCellValueChanged={onCellValueChanged}
           getRowStyle={getRowStyle}
           quickFilterText={searchText}
-          defaultColDef={{ sortable: true, filter: false, resizable: true, flex: 1 }}
+          defaultColDef={{ sortable: false, filter: false, resizable: true, flex: 1 }}
           animateRows={true}
         />
       </div>

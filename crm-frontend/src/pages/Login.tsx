@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import React from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import apiClient from '../api/client';
 import { Loader2, Mail, Lock, LayoutDashboard } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -72,7 +72,7 @@ export default function Login() {
 
         <form onSubmit={handleLogin} className="space-y-6">
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Email or Username</label>
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Email</label>
             <div className="relative group">
               <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-slate-500 group-focus-within:text-indigo-600 transition-colors">
                 <Mail size={18} />
@@ -115,13 +115,6 @@ export default function Login() {
             </button>
           </div>
         </form>
-
-        <p className="text-center mt-8 text-sm text-slate-600">
-          Don't have an account?{' '}
-          <Link to="/signup" className="text-indigo-600 font-bold hover:underline">
-            Register for free
-          </Link>
-        </p>
       </motion.div>
     </div>
   );

@@ -1,7 +1,82 @@
 import db from './db.js';
 import { buildClientJourneyFromBilling } from '../services/billingSync.js';
+import { normalizeUsPhoneForStorage } from '../utils/phone.js';
+
+const normalizeStoredPhones = async ({ table, idColumn, phoneColumn }) => {
+  const [rows] = await db.execute(
+    `SELECT \`${idColumn}\` AS id, \`${phoneColumn}\` AS phone FROM \`${table}\` WHERE \`${phoneColumn}\` IS NOT NULL AND TRIM(\`${phoneColumn}\`) <> ''`
+  );
+
+  for (const row of rows) {
+    const formattedPhone = normalizeUsPhoneForStorage(row.phone);
+
+    if (!formattedPhone || formattedPhone === row.phone) {
+      continue;
+    }
+
+    await db.execute(
+      `UPDATE \`${table}\` SET \`${phoneColumn}\` = ? WHERE \`${idColumn}\` = ?`,
+      [formattedPhone, row.id],
+    );
+  }
+};
 
 export const ensureTables = async () => {
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS roles (
+      id INT PRIMARY KEY,
+      name VARCHAR(100) NOT NULL,
+      type VARCHAR(100) NOT NULL UNIQUE
+    )
+  `);
+
+  await db.execute(`
+    INSERT INTO roles (id, name, type)
+    VALUES
+      (1, 'Admin', 'admin'),
+      (2, 'Employee', 'employee')
+    ON DUPLICATE KEY UPDATE
+      name = VALUES(name),
+      type = VALUES(type)
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      username VARCHAR(255) NOT NULL UNIQUE,
+      email VARCHAR(255) NOT NULL UNIQUE,
+      password VARCHAR(255) NOT NULL,
+      role_id INT NOT NULL DEFAULT 2,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_users_role_id (role_id)
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS leads (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      contact VARCHAR(255) NOT NULL DEFAULT '',
+      email VARCHAR(255) NOT NULL DEFAULT '',
+      business_owner VARCHAR(255) NOT NULL DEFAULT '',
+      business_name VARCHAR(255) NOT NULL DEFAULT '',
+      service VARCHAR(255) NOT NULL DEFAULT '',
+      response TEXT NULL,
+      follow_up DATE NULL,
+      lead_value DECIMAL(10, 2) NOT NULL DEFAULT 0,
+      \`lead\` VARCHAR(255) NULL,
+      lead_status VARCHAR(100) NOT NULL DEFAULT 'pending',
+      assigned_user INT NULL,
+      created_by INT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_leads_assigned_user (assigned_user),
+      INDEX idx_leads_created_by (created_by),
+      INDEX idx_leads_follow_up (follow_up),
+      INDEX idx_leads_status (lead_status)
+    )
+  `);
+
   const [leadOwnerColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'lead_owner'`);
   if (leadOwnerColumn.length > 0) {
     await db.execute('ALTER TABLE leads CHANGE COLUMN lead_owner `lead` VARCHAR(255) NULL');
@@ -59,6 +134,9 @@ export const ensureTables = async () => {
   if (clientJourneyLeadColumnInfo.length > 0 && clientJourneyLeadColumnInfo[0].Null === 'NO') {
     await db.execute('ALTER TABLE client_journeys MODIFY COLUMN lead_id INT NULL');
   }
+
+  await normalizeStoredPhones({ table: 'leads', idColumn: 'id', phoneColumn: 'contact' });
+  await normalizeStoredPhones({ table: 'client_journeys', idColumn: 'id', phoneColumn: 'phone' });
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS billings (

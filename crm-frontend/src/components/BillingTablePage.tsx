@@ -24,9 +24,11 @@ import {
 } from 'lucide-react';
 import apiClient from '../api/client';
 import type { Billing } from '../types';
+import ColumnVisibilityMenu, { getColumnVisibilityId } from './ColumnVisibilityMenu';
 import ConfirmDialog from './ConfirmDialog';
 import LeadDateFilter from './LeadDateFilter';
 import { filterItemsByDate, type LeadDateFilter as DateFilterValue } from '../utils/leadDateFilter';
+import { formatDateDisplay } from '../utils/date';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -46,6 +48,7 @@ const glassTheme = themeQuartz.withParams({
 const dividerStyle = {
   borderRight: '1px solid rgba(148, 163, 184, 0.45)',
 };
+const RESIZE_MIN_WIDTH = 56;
 
 const toMoney = (value: unknown) => {
   const number = Number(value);
@@ -106,6 +109,7 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>('all');
   const [draftRow, setDraftRow] = useState<GridBilling>(createEmptyBilling);
   const [billingPendingDelete, setBillingPendingDelete] = useState<number | string | null>(null);
+  const [visibleColumnIds, setVisibleColumnIds] = useState<string[]>([]);
 
   const user = useMemo(() => {
     const userStr = localStorage.getItem('user');
@@ -163,8 +167,8 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
 
   const columnDefs = useMemo<ColDef<GridBilling>[]>(() => {
     const columns: ColDef<GridBilling>[] = [
-      { field: 'invoice_date', headerName: 'Invoice Date', minWidth: 145, editable: true },
-      { field: 'payment_received_date', headerName: 'Payment Received Date', minWidth: 190, editable: true },
+      { field: 'invoice_date', headerName: 'Invoice Date', minWidth: 145, editable: true, valueFormatter: (params) => formatDateDisplay(params.value) },
+      { field: 'payment_received_date', headerName: 'Payment Received Date', minWidth: 190, editable: true, valueFormatter: (params) => formatDateDisplay(params.value) },
       { field: 'client_name', headerName: 'Client Name', minWidth: 170, editable: true },
       { field: 'business_name', headerName: 'Business Name', minWidth: 190, editable: true },
       { field: 'payment_method', headerName: 'Payment Method', minWidth: 170, editable: true },
@@ -198,6 +202,7 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
       },
       { field: 'lead', headerName: 'Lead', minWidth: 150, editable: true, filter: true },
       {
+        colId: 'actions',
         headerName: 'Actions',
         width: 100,
         pinned: 'right',
@@ -216,10 +221,37 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
 
     return columns.map((column, index) => ({
       ...column,
+      minWidth: 'width' in column && column.width ? column.minWidth : RESIZE_MIN_WIDTH,
       cellStyle: index === columns.length - 1 ? undefined : dividerStyle,
       headerStyle: index === columns.length - 1 ? undefined : dividerStyle,
     }));
   }, []);
+
+  const columnVisibilityOptions = useMemo(
+    () => columnDefs.map((column) => ({
+      id: getColumnVisibilityId(column),
+      label: String(column.headerName ?? column.field ?? column.colId ?? 'Column'),
+    })),
+    [columnDefs],
+  );
+
+  useEffect(() => {
+    setVisibleColumnIds((current) => {
+      const nextIds = columnVisibilityOptions.map((column) => column.id);
+      if (current.length === 0) {
+        return nextIds;
+      }
+
+      const retained = current.filter((id) => nextIds.includes(id));
+      const missing = nextIds.filter((id) => !retained.includes(id));
+      return [...retained, ...missing];
+    });
+  }, [columnVisibilityOptions]);
+
+  const visibleColumnDefs = useMemo(() => {
+    const visibleIdSet = new Set(visibleColumnIds);
+    return columnDefs.filter((column) => visibleIdSet.has(getColumnVisibilityId(column)));
+  }, [columnDefs, visibleColumnIds]);
 
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
     const { data, colDef, newValue, node } = event;
@@ -308,12 +340,20 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
           <h2 className="text-2xl font-bold text-slate-700 tracking-tight">
             {mode === 'admin' ? 'Billings' : 'My Billings'}
           </h2>
-          <p className="text-slate-500 text-sm">
-            {mode === 'admin' ? 'Track invoices, deductions, and net billing amounts.' : 'Your billing entries and payment tracking.'}
-          </p>
         </div>
 
         <div className="flex items-center gap-3">
+          <ColumnVisibilityMenu
+            columns={columnVisibilityOptions}
+            visibleColumnIds={visibleColumnIds}
+            onToggle={(columnId) => {
+              setVisibleColumnIds((current) =>
+                current.includes(columnId)
+                  ? current.filter((id) => id !== columnId)
+                  : [...current, columnId]
+              );
+            }}
+          />
           <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-500 transition-colors" size={18} />
@@ -358,12 +398,12 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
           theme={glassTheme}
           rowData={filteredRowData}
           pinnedBottomRowData={pinnedBottomRowData}
-          columnDefs={columnDefs}
+          columnDefs={visibleColumnDefs}
           onCellValueChanged={onCellValueChanged}
           getRowStyle={getRowStyle}
           quickFilterText={searchText}
           defaultColDef={{
-            sortable: true,
+            sortable: false,
             filter: false,
             resizable: true,
             flex: 1,

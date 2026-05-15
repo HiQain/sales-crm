@@ -1,4 +1,30 @@
 import db from '../config/db.js';
+import { isPhoneBlank, normalizeUsPhoneForStorage } from '../utils/phone.js';
+
+const serializeLead = (lead) => {
+  const normalizedContact = normalizeUsPhoneForStorage(lead.contact);
+
+  return {
+    ...lead,
+    contact: normalizedContact ?? lead.contact,
+  };
+};
+
+const normalizeLeadPayload = (payload) => {
+  const normalized = { ...payload };
+
+  if ('contact' in normalized) {
+    const formattedPhone = normalizeUsPhoneForStorage(normalized.contact);
+
+    if (formattedPhone === null && !isPhoneBlank(normalized.contact)) {
+      return null;
+    }
+
+    normalized.contact = formattedPhone ?? '';
+  }
+
+  return normalized;
+};
 
 export const getLeads = async (req, res) => {
   const { userId } = req.query;
@@ -15,7 +41,7 @@ export const getLeads = async (req, res) => {
     query += ` ORDER BY created_at DESC`;
 
     const [leads] = await db.execute(query, params);
-    res.json(leads);
+    res.json(leads.map(serializeLead));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to fetch leads' } });
@@ -23,10 +49,16 @@ export const getLeads = async (req, res) => {
 };
 
 export const createLead = async (req, res) => {
+  const payload = normalizeLeadPayload(req.body);
+
+  if (!payload) {
+    return res.status(400).json({ error: { message: 'Contact must be a valid US phone number in the format (240) 319-4630' } });
+  }
+
   const {
     contact, email, business_owner, business_name, service, response,
     follow_up, lead_value, lead, lead_status, assigned_user
-  } = req.body;
+  } = payload;
 
   try {
     const [result] = await db.execute(`
@@ -35,7 +67,7 @@ export const createLead = async (req, res) => {
        lead_value, \`lead\`, lead_status, assigned_user, created_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
-      contact || 'New Lead',
+      contact || '',
       email,
       business_owner,
       business_name,
@@ -48,7 +80,7 @@ export const createLead = async (req, res) => {
       assigned_user || req.user.id,
       req.user.id
     ]);
-    res.status(201).json({ id: result.insertId, ...req.body });
+    res.status(201).json(serializeLead({ id: result.insertId, ...payload }));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to create lead' } });
@@ -57,7 +89,11 @@ export const createLead = async (req, res) => {
 
 export const updateLead = async (req, res) => {
   const { id } = req.params;
-  const updates = req.body;
+  const updates = normalizeLeadPayload(req.body);
+
+  if (!updates) {
+    return res.status(400).json({ error: { message: 'Contact must be a valid US phone number in the format (240) 319-4630' } });
+  }
 
   if (Object.keys(updates).length === 0) {
     return res.status(400).json({ error: { message: 'No fields to update' } });

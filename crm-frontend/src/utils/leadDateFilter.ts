@@ -7,8 +7,8 @@ export const LEAD_DATE_FILTERS = [
   { value: 'last6Months', label: 'Last 6 months' },
   { value: 'thisMonth', label: 'This month' },
   { value: 'lastMonth', label: 'Last month' },
-  { value: 'lastYear', label: 'Last year' },
   { value: 'thisYear', label: 'This year' },
+  { value: 'lastYear', label: 'Last year' },
 ] as const;
 
 export type LeadDateFilter = (typeof LEAD_DATE_FILTERS)[number]['value'];

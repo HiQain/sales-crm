@@ -23,9 +23,12 @@ import {
 } from 'lucide-react';
 import apiClient from '../api/client';
 import type { ClientJourney } from '../types';
+import ColumnVisibilityMenu, { getColumnVisibilityId } from './ColumnVisibilityMenu';
 import ConfirmDialog from './ConfirmDialog';
 import LeadDateFilter from './LeadDateFilter';
 import { filterItemsByDate, type LeadDateFilter as DateFilterValue } from '../utils/leadDateFilter';
+import { formatDateDisplay } from '../utils/date';
+import { normalizeUsPhoneForStorage } from '../utils/phone';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -45,6 +48,7 @@ const glassTheme = themeQuartz.withParams({
 const dividerStyle = {
   borderRight: '1px solid rgba(148, 163, 184, 0.45)',
 };
+const RESIZE_MIN_WIDTH = 56;
 
 const toMoney = (value: unknown) => {
   const number = Number(value);
@@ -67,10 +71,12 @@ const toDateOnly = (value: unknown) => {
 const withDerivedJourneyValues = (record: GridClientJourney): GridClientJourney => {
   const total = toMoney(record.total);
   const paid = toMoney(record.paid);
+  const normalizedPhone = normalizeUsPhoneForStorage(record.phone);
 
   return {
     ...record,
     record_date: toDateOnly(record.record_date),
+    phone: normalizedPhone ?? record.phone,
     total,
     paid,
     balance: Math.max(total - paid, 0),
@@ -109,6 +115,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
   const [dateFilter, setDateFilter] = useState<DateFilterValue>('all');
   const [draftRow, setDraftRow] = useState<GridClientJourney>(createEmptyClientJourney);
   const [recordPendingDelete, setRecordPendingDelete] = useState<number | string | null>(null);
+  const [visibleColumnIds, setVisibleColumnIds] = useState<string[]>([]);
 
   const user = useMemo(() => {
     const userStr = localStorage.getItem('user');
@@ -165,8 +172,8 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
   }, [recordPendingDelete]);
 
   const columnDefs = useMemo<ColDef<GridClientJourney>[]>(() => {
-    const columns: ColDef<GridClientJourney>[] = [
-      { field: 'record_date', headerName: 'Date', minWidth: 135, editable: true },
+      const columns: ColDef<GridClientJourney>[] = [
+      { field: 'record_date', headerName: 'Date', minWidth: 135, editable: true, valueFormatter: (params) => formatDateDisplay(params.value) },
       { field: 'client_name', headerName: 'Client Name', minWidth: 170, editable: true },
       { field: 'business_name', headerName: 'Business Name', minWidth: 180, editable: true },
       { field: 'credit_card_info', headerName: 'Credit Card Info.', minWidth: 190, editable: true },
@@ -211,6 +218,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
         cellClass: 'text-right font-mono font-bold',
       },
       {
+        colId: 'actions',
         headerName: 'Actions',
         width: 100,
         pinned: 'right',
@@ -229,24 +237,62 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
 
     return columns.map((column, index) => ({
       ...column,
+      minWidth: 'width' in column && column.width ? column.minWidth : RESIZE_MIN_WIDTH,
       cellStyle: index === columns.length - 1 ? undefined : dividerStyle,
       headerStyle: index === columns.length - 1 ? undefined : dividerStyle,
     }));
   }, []);
 
+  const columnVisibilityOptions = useMemo(
+    () => columnDefs.map((column) => ({
+      id: getColumnVisibilityId(column),
+      label: String(column.headerName ?? column.field ?? column.colId ?? 'Column'),
+    })),
+    [columnDefs],
+  );
+
+  useEffect(() => {
+    setVisibleColumnIds((current) => {
+      const nextIds = columnVisibilityOptions.map((column) => column.id);
+      if (current.length === 0) {
+        return nextIds;
+      }
+
+      const retained = current.filter((id) => nextIds.includes(id));
+      const missing = nextIds.filter((id) => !retained.includes(id));
+      return [...retained, ...missing];
+    });
+  }, [columnVisibilityOptions]);
+
+  const visibleColumnDefs = useMemo(() => {
+    const visibleIdSet = new Set(visibleColumnIds);
+    return columnDefs.filter((column) => visibleIdSet.has(getColumnVisibilityId(column)));
+  }, [columnDefs, visibleColumnIds]);
+
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
-    const { data, colDef, newValue, node } = event;
+    const { data, colDef, newValue, oldValue, node } = event;
     const field = colDef.field;
     if (!field) return;
 
-    const hasValue = !(newValue == null || (typeof newValue === 'string' && newValue.trim() === ''));
+    const normalizedValue = field === 'phone'
+      ? normalizeUsPhoneForStorage(newValue)
+      : newValue;
+
+    if (field === 'phone' && normalizedValue === null) {
+      fetchData();
+      return;
+    }
+
+    const nextValue = field === 'phone' ? (normalizedValue ?? oldValue ?? '') : newValue;
+
+    const hasValue = !(nextValue == null || (typeof nextValue === 'string' && nextValue.trim() === ''));
     if (node.rowPinned === 'bottom') {
       if (!hasValue) {
-        setDraftRow(prev => ({ ...prev, [field]: newValue }));
+        setDraftRow(prev => ({ ...prev, [field]: nextValue }));
         return;
       }
 
-      const nextDraft = { ...draftRow, [field]: newValue };
+      const nextDraft = { ...draftRow, [field]: nextValue };
       const normalizedDraft = withDerivedJourneyValues(nextDraft);
       setDraftRow(createEmptyClientJourney());
 
@@ -263,16 +309,16 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
       return;
     }
 
-    const nextRecord = withDerivedJourneyValues({ ...data, [field]: newValue });
+    const normalizedNextRecord = withDerivedJourneyValues({ ...data, [field]: nextValue });
     setRowData(prev => prev.map(row => (
-      row.id === data.id ? nextRecord : row
+      row.id === data.id ? normalizedNextRecord : row
     )));
 
     try {
       await apiClient.put(`/client-journeys/${data.id}`, {
         ...(field === 'paid' || field === 'total'
-          ? { [field]: newValue, balance: nextRecord.balance }
-          : { [field]: newValue }),
+          ? { [field]: nextValue, balance: normalizedNextRecord.balance }
+          : { [field]: nextValue }),
       });
     } catch (error) {
       console.error('Update failed:', error);
@@ -321,12 +367,20 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
           <h2 className="text-2xl font-bold text-slate-700 tracking-tight">
             {mode === 'admin' ? 'Client Journey' : 'My Clients'}
           </h2>
-          <p className="text-slate-500 text-sm">
-            {mode === 'admin' ? 'Track each client journey from lead through payment.' : 'Your client journeys and payment tracking.'}
-          </p>
         </div>
 
         <div className="flex items-center gap-3">
+          <ColumnVisibilityMenu
+            columns={columnVisibilityOptions}
+            visibleColumnIds={visibleColumnIds}
+            onToggle={(columnId) => {
+              setVisibleColumnIds((current) =>
+                current.includes(columnId)
+                  ? current.filter((id) => id !== columnId)
+                  : [...current, columnId]
+              );
+            }}
+          />
           <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-500 transition-colors" size={18} />
@@ -371,12 +425,12 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
           theme={glassTheme}
           rowData={filteredRowData}
           pinnedBottomRowData={pinnedBottomRowData}
-          columnDefs={columnDefs}
+          columnDefs={visibleColumnDefs}
           onCellValueChanged={onCellValueChanged}
           getRowStyle={getRowStyle}
           quickFilterText={searchText}
           defaultColDef={{
-            sortable: true,
+            sortable: false,
             filter: false,
             resizable: true,
             flex: 1,

@@ -4,7 +4,6 @@ import AdminLayout from './components/AdminLayout';
 import EmployeeLayout from './components/EmployeeLayout';
 
 import Login from './pages/Login';
-import Signup from './pages/Signup';
 
 // Admin Pages
 import AdminLeadsPage from './pages/admin/LeadsPage';
@@ -25,7 +24,6 @@ export default function App() {
         <Routes>
           {/* Public Routes */}
           <Route path="/login" element={<Login />} />
-          <Route path="/signup" element={<Signup />} />
           
           {/* Admin Routes */}
           <Route element={<ProtectedRoute allowedRoles={['admin']} />}>

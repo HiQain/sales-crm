@@ -38,6 +38,7 @@ const myTheme = themeQuartz.withParams({
   textColor: '#2a2a2a',
   fontSize: '13px',
 });
+const RESIZE_MIN_WIDTH = 56;
 
 // Custom Badge Renderer for Status
 const StatusBadge = (params: ICellRendererParams) => {
@@ -81,7 +82,7 @@ export default function SalesGrid() {
   }, [fetchData]);
 
   const columnDefs = useMemo<ColDef[]>(() => [
-    { field: 'contact', headerName: 'Contact', pinned: 'left', minWidth: 150, editable: true },
+    { field: 'contact', headerName: 'Contact', pinned: 'left' as const, minWidth: 150, editable: true },
     { field: 'ns', headerName: 'NS', width: 80, editable: true },
     { field: 'businessOwner', headerName: 'Business Owner', minWidth: 150, editable: true },
     { field: 'businessName', headerName: 'Business Name', minWidth: 180, editable: true },
@@ -130,7 +131,10 @@ export default function SalesGrid() {
         values: ['pending', 'paid', 'contacted', 'failed']
       }
     }
-  ], []);
+  ].map((column) => ({
+    ...column,
+    minWidth: 'width' in column && column.width ? column.minWidth : RESIZE_MIN_WIDTH,
+  })), []);
 
   const onAddLead = useCallback(async () => {
     setLoading(true);
@@ -225,7 +229,7 @@ export default function SalesGrid() {
             getRowStyle={getRowStyle}
             quickFilterText={searchText}
             defaultColDef={{
-              sortable: true,
+              sortable: false,
               filter: false,
               resizable: true,
               flex: 1,

@@ -1,4 +1,5 @@
 import db from '../config/db.js';
+import { isPhoneBlank, normalizeUsPhoneForStorage } from '../utils/phone.js';
 
 const CLIENT_JOURNEYS_TABLE = 'client_journeys';
 
@@ -80,6 +81,16 @@ const normalizeClientJourneyPayload = (payload, currentRecord = {}) => {
     normalized.record_date = toDateOnly(normalized.record_date);
   }
 
+  if ('phone' in normalized) {
+    const formattedPhone = normalizeUsPhoneForStorage(normalized.phone);
+
+    if (formattedPhone === null && !isPhoneBlank(normalized.phone)) {
+      return null;
+    }
+
+    normalized.phone = formattedPhone ?? '';
+  }
+
   if ('balance' in normalized) {
     normalized.balance = toMoney(normalized.balance);
   } else if (hasTotal || hasPaid) {
@@ -94,6 +105,7 @@ const normalizeClientJourneyPayload = (payload, currentRecord = {}) => {
 const serializeClientJourney = (record) => ({
   ...record,
   record_date: toDateOnly(record.record_date) || '',
+  phone: normalizeUsPhoneForStorage(record.phone) ?? record.phone,
 });
 
 export const getSalesRecords = async (req, res) => {
@@ -123,6 +135,10 @@ export const createSalesRecord = async (req, res) => {
     ...pickSalesRecordFields(req.body),
     assigned_user: req.body.assigned_user || req.user.id,
   });
+
+  if (!payload) {
+    return res.status(400).json({ error: { message: 'Phone must be a valid US phone number in the format (240) 319-4630' } });
+  }
 
   try {
     const [salesRecordResult] = await db.execute(`
@@ -181,6 +197,11 @@ export const updateSalesRecord = async (req, res) => {
     }
 
     const updates = normalizeClientJourneyPayload(rawUpdates, records[0]);
+
+    if (!updates) {
+      return res.status(400).json({ error: { message: 'Phone must be a valid US phone number in the format (240) 319-4630' } });
+    }
+
     const setClause = Object.keys(updates).map(key => `${quoteColumn(key)} = ?`).join(', ');
     await db.execute(
       `UPDATE ${CLIENT_JOURNEYS_TABLE} SET ${setClause} WHERE id = ?`,

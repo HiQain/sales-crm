@@ -6,6 +6,7 @@ import { Loader2, Mail, Shield, Calendar, ChevronRight, User as UserIcon, Trash2
 import { User } from '../../types';
 import CreateUserModal from "../../components/CreateUser";
 import ChangePasswordModal from "../../components/ChangePassword";
+import { formatDateDisplay } from '../../utils/date';
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
@@ -51,7 +52,6 @@ export default function UsersPage() {
       <div className="flex items-center justify-between mb-6">
         <div className="mb-8">
           <h2 className="text-2xl font-bold text-slate-700 tracking-tight">Employees Dashboard</h2>
-          <p className="text-slate-500 text-sm">Manage user accounts and view their individual performance.</p>
         </div>
 
         <button
@@ -105,7 +105,7 @@ export default function UsersPage() {
                   </div>
                   <div className="flex items-center gap-2 text-slate-500 text-xs text-nowrap">
                     <Calendar size={14} className="opacity-60" />
-                    <span>Joined {new Date(user.createdAt).toLocaleDateString()}</span>
+                    <span>Joined {formatDateDisplay(user.createdAt)}</span>
                   </div>
                 </div>
               </div>
