@@ -3,6 +3,7 @@ import { AgGridReact } from 'ag-grid-react';
 import type {
   ColDef,
   CellValueChangedEvent,
+  ColumnMovedEvent,
   RowClassParams,
   ICellRendererParams,
   ValueParserParams,
@@ -22,6 +23,7 @@ import LeadDateFilter from '../../components/LeadDateFilter';
 import { filterLeadsByDate, type LeadDateFilter as LeadDateFilterValue } from '../../utils/leadDateFilter';
 import { formatDateDisplay } from '../../utils/date';
 import { normalizeUsPhoneForStorage } from '../../utils/phone';
+import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../../utils/columnLayout';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -85,6 +87,7 @@ const withNormalizedLead = (lead: GridLead): GridLead => ({
 });
 
 export default function MyLeadsPage() {
+  const layoutStorageKey = 'crm:employee-leads';
   const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
@@ -92,7 +95,9 @@ export default function MyLeadsPage() {
   const [draftRow, setDraftRow] = useState<GridLead>(createEmptyLead);
   const [leadPendingDelete, setLeadPendingDelete] = useState<number | string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [orderedColumnIds, setOrderedColumnIds] = useState<string[]>([]);
   const [visibleColumnIds, setVisibleColumnIds] = useState<string[]>([]);
+  const [layoutReady, setLayoutReady] = useState(false);
 
   const user = useMemo(() => {
     const userStr = localStorage.getItem('user');
@@ -209,22 +214,33 @@ export default function MyLeadsPage() {
   );
 
   useEffect(() => {
-    setVisibleColumnIds((current) => {
-      const nextIds = columnVisibilityOptions.map((column) => column.id);
-      if (current.length === 0) {
-        return nextIds;
-      }
+    setLayoutReady(false);
+    const allIds = columnVisibilityOptions.map((column) => column.id);
+    const stored = loadColumnLayout(layoutStorageKey);
+    const nextOrderedIds = mergeOrderedIds(allIds, stored?.order);
+    const nextVisibleIds = mergeVisibleIds(nextOrderedIds, stored?.visible);
 
-      const retained = current.filter((id) => nextIds.includes(id));
-      const missing = nextIds.filter((id) => !retained.includes(id));
-      return [...retained, ...missing];
-    });
-  }, [columnVisibilityOptions]);
+    setOrderedColumnIds(nextOrderedIds);
+    setVisibleColumnIds(nextVisibleIds);
+    setLayoutReady(true);
+  }, [columnVisibilityOptions, layoutStorageKey]);
 
   const visibleColumnDefs = useMemo(() => {
     const visibleIdSet = new Set(visibleColumnIds);
-    return columnDefs.filter((column) => visibleIdSet.has(getColumnVisibilityId(column)));
-  }, [columnDefs, visibleColumnIds]);
+    const orderedIdSet = orderedColumnIds.length > 0 ? orderedColumnIds : columnDefs.map((column) => getColumnVisibilityId(column));
+
+    return orderedIdSet
+      .map((id) => columnDefs.find((column) => getColumnVisibilityId(column) === id))
+      .filter((column): column is ColDef<GridLead> => Boolean(column) && visibleIdSet.has(getColumnVisibilityId(column)));
+  }, [columnDefs, orderedColumnIds, visibleColumnIds]);
+
+  useEffect(() => {
+    if (!layoutReady || orderedColumnIds.length === 0) return;
+    saveColumnLayout(layoutStorageKey, {
+      order: orderedColumnIds,
+      visible: visibleColumnIds,
+    });
+  }, [layoutReady, layoutStorageKey, orderedColumnIds, visibleColumnIds]);
 
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
     if (!user) return;
@@ -387,6 +403,17 @@ export default function MyLeadsPage() {
           pinnedBottomRowData={pinnedBottomRowData}
           columnDefs={visibleColumnDefs}
           onCellValueChanged={onCellValueChanged}
+          onColumnMoved={(event: ColumnMovedEvent) => {
+            if (!event.finished) return;
+
+            const displayedIds = event.api.getAllDisplayedColumns().map((column) => column.getColId());
+            setOrderedColumnIds((current) => {
+              const fallback = columnDefs.map((column) => getColumnVisibilityId(column));
+              const base = current.length > 0 ? current : fallback;
+              const hiddenIds = base.filter((id) => !displayedIds.includes(id));
+              return [...displayedIds, ...hiddenIds];
+            });
+          }}
           getRowStyle={getRowStyle}
           quickFilterText={searchText}
           defaultColDef={{ sortable: false, filter: false, resizable: true, flex: 1 }}

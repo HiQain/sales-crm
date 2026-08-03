@@ -3,6 +3,7 @@ import { AgGridReact } from 'ag-grid-react';
 import type {
   ColDef,
   CellValueChangedEvent,
+  ColumnMovedEvent,
   RowClassParams,
   ICellRendererParams,
   ValueParserParams,
@@ -22,6 +23,7 @@ import LeadDateFilter from '../../components/LeadDateFilter';
 import { filterLeadsByDate, type LeadDateFilter as LeadDateFilterValue } from '../../utils/leadDateFilter';
 import { formatDateDisplay } from '../../utils/date';
 import { normalizeUsPhoneForStorage } from '../../utils/phone';
+import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../../utils/columnLayout';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -34,8 +36,10 @@ const glassTheme = themeQuartz.withParams({
   headerFontWeight: 'bold',
   textColor: 'oklch(44.6% 0.043 257.281)', // slate-600
   fontSize: '12px',
-  headerHeight: 44,
-  rowHeight: 40,
+  headerHeight: 34,
+  rowHeight: 28,
+  cellHorizontalPaddingScale: 0.45,
+  headerColumnBorder: true,
 });
 
 const StatusBadge = (params: ICellRendererParams) => {
@@ -85,6 +89,7 @@ const withNormalizedLead = (lead: GridLead): GridLead => ({
 });
 
 export default function LeadsPage({ userId }: { userId?: string }) {
+  const layoutStorageKey = userId ? `crm:admin-user-leads:${userId}` : 'crm:admin-leads';
   const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
@@ -93,7 +98,9 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const [draftRow, setDraftRow] = useState<GridLead>(createEmptyLead);
   const [leadPendingDelete, setLeadPendingDelete] = useState<number | string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [orderedColumnIds, setOrderedColumnIds] = useState<string[]>([]);
   const [visibleColumnIds, setVisibleColumnIds] = useState<string[]>([]);
+  const [layoutReady, setLayoutReady] = useState(false);
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -152,15 +159,15 @@ export default function LeadsPage({ userId }: { userId?: string }) {
 
   const columnDefs = useMemo<ColDef<GridLead>[]>(() => {
     const columns: ColDef<GridLead>[] = [
-      { field: 'contact', headerName: 'Contact', minWidth: 150, editable: true },
-      { field: 'email', headerName: 'Email', minWidth: 120, editable: true },
-      { field: 'business_owner', headerName: 'Business Owner', minWidth: 150, editable: true },
-      { field: 'business_name', headerName: 'Business Name', minWidth: 150, editable: true },
-      { field: 'service', headerName: 'Service', minWidth: 120, editable: true, filter: true },
+      { field: 'contact', headerName: 'Contact', minWidth: 112, editable: true },
+      { field: 'email', headerName: 'Email', minWidth: 118, editable: true },
+      { field: 'business_owner', headerName: 'Business Owner', minWidth: 118, editable: true },
+      { field: 'business_name', headerName: 'Business Name', minWidth: 118, editable: true },
+      { field: 'service', headerName: 'Service', minWidth: 92, editable: true, filter: true },
       {
         field: 'response',
         headerName: 'Response',
-        minWidth: 250,
+        minWidth: 112,
         editable: true,
         cellEditor: 'agLargeTextCellEditor',
         cellEditorPopup: true,
@@ -169,7 +176,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       {
         field: 'follow_up',
         headerName: 'Follow Up',
-        minWidth: 200,
+        minWidth: 104,
         editable: true,
         cellEditor: 'agLargeTextCellEditor',
         cellEditorPopup: true,
@@ -179,16 +186,16 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       {
         field: 'lead_value',
         headerName: 'Lead Value',
-        minWidth: 180,
+        minWidth: 102,
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-right font-mono font-bold'
+        cellClass: 'text-left font-mono font-bold'
       },
       {
         field: 'lead',
         headerName: 'Lead',
-        minWidth: 180,
+        minWidth: 92,
         editable: true,
         filter: true,
         cellEditor: 'agSelectCellEditor',
@@ -197,7 +204,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       {
         field: 'lead_status',
         headerName: 'Status',
-        minWidth: 180,
+        minWidth: 104,
         editable: true,
         cellRenderer: StatusBadge,
         cellEditor: 'agSelectCellEditor',
@@ -206,7 +213,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       {
         colId: 'actions',
         headerName: 'Actions',
-        width: 100,
+        width: 64,
         pinned: 'right',
         cellRenderer: (params: ICellRendererParams) => (
           params.node.rowPinned === 'bottom' ? null : (
@@ -238,22 +245,33 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   );
 
   useEffect(() => {
-    setVisibleColumnIds((current) => {
-      const nextIds = columnVisibilityOptions.map((column) => column.id);
-      if (current.length === 0) {
-        return nextIds;
-      }
+    setLayoutReady(false);
+    const allIds = columnVisibilityOptions.map((column) => column.id);
+    const stored = loadColumnLayout(layoutStorageKey);
+    const nextOrderedIds = mergeOrderedIds(allIds, stored?.order);
+    const nextVisibleIds = mergeVisibleIds(nextOrderedIds, stored?.visible);
 
-      const retained = current.filter((id) => nextIds.includes(id));
-      const missing = nextIds.filter((id) => !retained.includes(id));
-      return [...retained, ...missing];
-    });
-  }, [columnVisibilityOptions]);
+    setOrderedColumnIds(nextOrderedIds);
+    setVisibleColumnIds(nextVisibleIds);
+    setLayoutReady(true);
+  }, [columnVisibilityOptions, layoutStorageKey]);
 
   const visibleColumnDefs = useMemo(() => {
     const visibleIdSet = new Set(visibleColumnIds);
-    return columnDefs.filter((column) => visibleIdSet.has(getColumnVisibilityId(column)));
-  }, [columnDefs, visibleColumnIds]);
+    const orderedIdSet = orderedColumnIds.length > 0 ? orderedColumnIds : columnDefs.map((column) => getColumnVisibilityId(column));
+
+    return orderedIdSet
+      .map((id) => columnDefs.find((column) => getColumnVisibilityId(column) === id))
+      .filter((column): column is ColDef<GridLead> => Boolean(column) && visibleIdSet.has(getColumnVisibilityId(column)));
+  }, [columnDefs, orderedColumnIds, visibleColumnIds]);
+
+  useEffect(() => {
+    if (!layoutReady || orderedColumnIds.length === 0) return;
+    saveColumnLayout(layoutStorageKey, {
+      order: orderedColumnIds,
+      visible: visibleColumnIds,
+    });
+  }, [layoutReady, layoutStorageKey, orderedColumnIds, visibleColumnIds]);
 
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
     const { data, colDef, newValue, oldValue, node } = event;
@@ -419,6 +437,17 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             pinnedBottomRowData={pinnedBottomRowData}
             columnDefs={visibleColumnDefs}
             onCellValueChanged={onCellValueChanged}
+            onColumnMoved={(event: ColumnMovedEvent) => {
+              if (!event.finished) return;
+
+              const displayedIds = event.api.getAllDisplayedColumns().map((column) => column.getColId());
+              setOrderedColumnIds((current) => {
+                const fallback = columnDefs.map((column) => getColumnVisibilityId(column));
+                const base = current.length > 0 ? current : fallback;
+                const hiddenIds = base.filter((id) => !displayedIds.includes(id));
+                return [...displayedIds, ...hiddenIds];
+              });
+            }}
             getRowStyle={getRowStyle}
             quickFilterText={searchText}
             defaultColDef={{
@@ -426,7 +455,10 @@ export default function LeadsPage({ userId }: { userId?: string }) {
               filter: false,
               resizable: true,
               flex: 1,
+              cellStyle: { textAlign: 'left', paddingLeft: '6px', paddingRight: '6px' },
             }}
+            rowHeight={28}
+            headerHeight={34}
             animateRows={true}
           />
         </div>

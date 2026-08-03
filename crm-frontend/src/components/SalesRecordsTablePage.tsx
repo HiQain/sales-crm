@@ -3,6 +3,7 @@ import { AgGridReact } from 'ag-grid-react';
 import type {
   CellValueChangedEvent,
   ColDef,
+  ColumnMovedEvent,
   ICellRendererParams,
   RowClassParams,
   ValueFormatterParams,
@@ -29,6 +30,7 @@ import LeadDateFilter from './LeadDateFilter';
 import { filterItemsByDate, type LeadDateFilter as DateFilterValue } from '../utils/leadDateFilter';
 import { formatDateDisplay } from '../utils/date';
 import { normalizeUsPhoneForStorage } from '../utils/phone';
+import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../utils/columnLayout';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -41,8 +43,10 @@ const glassTheme = themeQuartz.withParams({
   headerFontWeight: 'bold',
   textColor: 'oklch(44.6% 0.043 257.281)',
   fontSize: '12px',
-  headerHeight: 44,
-  rowHeight: 40,
+  headerHeight: 34,
+  rowHeight: 28,
+  cellHorizontalPaddingScale: 0.45,
+  headerColumnBorder: true,
 });
 
 const dividerStyle = {
@@ -108,6 +112,7 @@ interface SalesRecordsTablePageProps {
 }
 
 export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePageProps) {
+  const layoutStorageKey = `crm:${mode}-client-journeys`;
   const [rowData, setRowData] = useState<GridClientJourney[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -115,7 +120,9 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
   const [dateFilter, setDateFilter] = useState<DateFilterValue>('all');
   const [draftRow, setDraftRow] = useState<GridClientJourney>(createEmptyClientJourney);
   const [recordPendingDelete, setRecordPendingDelete] = useState<number | string | null>(null);
+  const [orderedColumnIds, setOrderedColumnIds] = useState<string[]>([]);
   const [visibleColumnIds, setVisibleColumnIds] = useState<string[]>([]);
+  const [layoutReady, setLayoutReady] = useState(false);
 
   const user = useMemo(() => {
     const userStr = localStorage.getItem('user');
@@ -173,19 +180,19 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
 
   const columnDefs = useMemo<ColDef<GridClientJourney>[]>(() => {
       const columns: ColDef<GridClientJourney>[] = [
-      { field: 'record_date', headerName: 'Date', minWidth: 135, editable: true, valueFormatter: (params) => formatDateDisplay(params.value) },
-      { field: 'client_name', headerName: 'Client Name', minWidth: 170, editable: true },
-      { field: 'business_name', headerName: 'Business Name', minWidth: 180, editable: true },
-      { field: 'credit_card_info', headerName: 'Credit Card Info.', minWidth: 190, editable: true },
-      { field: 'email', headerName: 'Email', minWidth: 210, editable: true },
-      { field: 'phone', headerName: 'Phone', minWidth: 150, editable: true },
-      { field: 'sales', headerName: 'Sales', minWidth: 140, editable: true },
-      { field: 'lead', headerName: 'Lead', minWidth: 140, editable: true, filter: true },
-      { field: 'service', headerName: 'Service', minWidth: 140, editable: true, filter: true },
+      { field: 'record_date', headerName: 'Date', minWidth: 105, editable: true, valueFormatter: (params) => formatDateDisplay(params.value) },
+      { field: 'client_name', headerName: 'Client Name', minWidth: 118, editable: true },
+      { field: 'business_name', headerName: 'Business Name', minWidth: 118, editable: true },
+      { field: 'credit_card_info', headerName: 'Credit Card Info.', minWidth: 118, editable: true },
+      { field: 'email', headerName: 'Email', minWidth: 118, editable: true },
+      { field: 'phone', headerName: 'Phone', minWidth: 105, editable: true },
+      { field: 'sales', headerName: 'Sales', minWidth: 92, editable: true },
+      { field: 'lead', headerName: 'Lead', minWidth: 92, editable: true, filter: true },
+      { field: 'service', headerName: 'Service', minWidth: 92, editable: true, filter: true },
       {
         field: 'status',
         headerName: 'Status',
-        minWidth: 140,
+        minWidth: 104,
         editable: true,
         cellEditor: 'agSelectCellEditor',
         cellEditorParams: { values: ['pending', 'contacted', 'paid', 'failed'] },
@@ -193,34 +200,34 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
       {
         field: 'paid',
         headerName: 'Paid',
-        minWidth: 130,
+        minWidth: 102,
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-right font-mono font-bold',
+        cellClass: 'text-left font-mono font-bold',
       },
       {
         field: 'balance',
         headerName: 'Balance',
-        minWidth: 130,
+        minWidth: 102,
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-right font-mono font-bold',
+        cellClass: 'text-left font-mono font-bold',
       },
       {
         field: 'total',
         headerName: 'Total',
-        minWidth: 130,
+        minWidth: 102,
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-right font-mono font-bold',
+        cellClass: 'text-left font-mono font-bold',
       },
       {
         colId: 'actions',
         headerName: 'Actions',
-        width: 100,
+        width: 64,
         pinned: 'right',
         cellRenderer: (params: ICellRendererParams) => (
           params.node.rowPinned === 'bottom' ? null : (
@@ -252,22 +259,33 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
   );
 
   useEffect(() => {
-    setVisibleColumnIds((current) => {
-      const nextIds = columnVisibilityOptions.map((column) => column.id);
-      if (current.length === 0) {
-        return nextIds;
-      }
+    setLayoutReady(false);
+    const allIds = columnVisibilityOptions.map((column) => column.id);
+    const stored = loadColumnLayout(layoutStorageKey);
+    const nextOrderedIds = mergeOrderedIds(allIds, stored?.order);
+    const nextVisibleIds = mergeVisibleIds(nextOrderedIds, stored?.visible);
 
-      const retained = current.filter((id) => nextIds.includes(id));
-      const missing = nextIds.filter((id) => !retained.includes(id));
-      return [...retained, ...missing];
-    });
-  }, [columnVisibilityOptions]);
+    setOrderedColumnIds(nextOrderedIds);
+    setVisibleColumnIds(nextVisibleIds);
+    setLayoutReady(true);
+  }, [columnVisibilityOptions, layoutStorageKey]);
 
   const visibleColumnDefs = useMemo(() => {
     const visibleIdSet = new Set(visibleColumnIds);
-    return columnDefs.filter((column) => visibleIdSet.has(getColumnVisibilityId(column)));
-  }, [columnDefs, visibleColumnIds]);
+    const orderedIdSet = orderedColumnIds.length > 0 ? orderedColumnIds : columnDefs.map((column) => getColumnVisibilityId(column));
+
+    return orderedIdSet
+      .map((id) => columnDefs.find((column) => getColumnVisibilityId(column) === id))
+      .filter((column): column is ColDef<GridClientJourney> => Boolean(column) && visibleIdSet.has(getColumnVisibilityId(column)));
+  }, [columnDefs, orderedColumnIds, visibleColumnIds]);
+
+  useEffect(() => {
+    if (!layoutReady || orderedColumnIds.length === 0) return;
+    saveColumnLayout(layoutStorageKey, {
+      order: orderedColumnIds,
+      visible: visibleColumnIds,
+    });
+  }, [layoutReady, layoutStorageKey, orderedColumnIds, visibleColumnIds]);
 
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
     const { data, colDef, newValue, oldValue, node } = event;
@@ -427,6 +445,17 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
           pinnedBottomRowData={pinnedBottomRowData}
           columnDefs={visibleColumnDefs}
           onCellValueChanged={onCellValueChanged}
+          onColumnMoved={(event: ColumnMovedEvent) => {
+            if (!event.finished) return;
+
+            const displayedIds = event.api.getAllDisplayedColumns().map((column) => column.getColId());
+            setOrderedColumnIds((current) => {
+              const fallback = columnDefs.map((column) => getColumnVisibilityId(column));
+              const base = current.length > 0 ? current : fallback;
+              const hiddenIds = base.filter((id) => !displayedIds.includes(id));
+              return [...displayedIds, ...hiddenIds];
+            });
+          }}
           getRowStyle={getRowStyle}
           quickFilterText={searchText}
           defaultColDef={{
@@ -434,7 +463,10 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
             filter: false,
             resizable: true,
             flex: 1,
+            cellStyle: { textAlign: 'left', paddingLeft: '6px', paddingRight: '6px' },
           }}
+          rowHeight={28}
+          headerHeight={34}
           animateRows={true}
         />
       </div>

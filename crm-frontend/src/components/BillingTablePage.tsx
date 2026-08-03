@@ -3,6 +3,7 @@ import { AgGridReact } from 'ag-grid-react';
 import type {
   CellValueChangedEvent,
   ColDef,
+  ColumnMovedEvent,
   ICellRendererParams,
   RowClassParams,
   ValueFormatterParams,
@@ -29,6 +30,7 @@ import ConfirmDialog from './ConfirmDialog';
 import LeadDateFilter from './LeadDateFilter';
 import { filterItemsByDate, type LeadDateFilter as DateFilterValue } from '../utils/leadDateFilter';
 import { formatDateDisplay } from '../utils/date';
+import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../utils/columnLayout';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
@@ -41,8 +43,10 @@ const glassTheme = themeQuartz.withParams({
   headerFontWeight: 'bold',
   textColor: 'oklch(44.6% 0.043 257.281)',
   fontSize: '12px',
-  headerHeight: 44,
-  rowHeight: 40,
+  headerHeight: 34,
+  rowHeight: 28,
+  cellHorizontalPaddingScale: 0.45,
+  headerColumnBorder: true,
 });
 
 const dividerStyle = {
@@ -102,6 +106,7 @@ interface BillingTablePageProps {
 }
 
 export default function BillingTablePage({ mode }: BillingTablePageProps) {
+  const layoutStorageKey = `crm:${mode}-billings`;
   const [rowData, setRowData] = useState<GridBilling[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -109,7 +114,9 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>('all');
   const [draftRow, setDraftRow] = useState<GridBilling>(createEmptyBilling);
   const [billingPendingDelete, setBillingPendingDelete] = useState<number | string | null>(null);
+  const [orderedColumnIds, setOrderedColumnIds] = useState<string[]>([]);
   const [visibleColumnIds, setVisibleColumnIds] = useState<string[]>([]);
+  const [layoutReady, setLayoutReady] = useState(false);
 
   const user = useMemo(() => {
     const userStr = localStorage.getItem('user');
@@ -167,44 +174,44 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
 
   const columnDefs = useMemo<ColDef<GridBilling>[]>(() => {
     const columns: ColDef<GridBilling>[] = [
-      { field: 'invoice_date', headerName: 'Invoice Date', minWidth: 145, editable: true, valueFormatter: (params) => formatDateDisplay(params.value) },
-      { field: 'payment_received_date', headerName: 'Payment Received Date', minWidth: 190, editable: true, valueFormatter: (params) => formatDateDisplay(params.value) },
-      { field: 'client_name', headerName: 'Client Name', minWidth: 170, editable: true },
-      { field: 'business_name', headerName: 'Business Name', minWidth: 190, editable: true },
-      { field: 'payment_method', headerName: 'Payment Method', minWidth: 170, editable: true },
-      { field: 'service', headerName: 'Service', minWidth: 150, editable: true, filter: true },
+      { field: 'invoice_date', headerName: 'Invoice Date', minWidth: 108, editable: true, valueFormatter: (params) => formatDateDisplay(params.value) },
+      { field: 'payment_received_date', headerName: 'Payment Received Date', minWidth: 124, editable: true, valueFormatter: (params) => formatDateDisplay(params.value) },
+      { field: 'client_name', headerName: 'Client Name', minWidth: 118, editable: true },
+      { field: 'business_name', headerName: 'Business Name', minWidth: 118, editable: true },
+      { field: 'payment_method', headerName: 'Payment Method', minWidth: 118, editable: true },
+      { field: 'service', headerName: 'Service', minWidth: 92, editable: true, filter: true },
       {
         field: 'amount',
         headerName: 'Amount',
-        minWidth: 130,
+        minWidth: 102,
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-right font-mono font-bold',
+        cellClass: 'text-left font-mono font-bold',
       },
       {
         field: 'fee_deduction',
         headerName: 'Fee Deduction',
-        minWidth: 150,
+        minWidth: 104,
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-right font-mono font-bold',
+        cellClass: 'text-left font-mono font-bold',
       },
       {
         field: 'net_currency',
         headerName: 'Net Currency',
-        minWidth: 145,
+        minWidth: 104,
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-right font-mono font-bold',
+        cellClass: 'text-left font-mono font-bold',
       },
-      { field: 'lead', headerName: 'Lead', minWidth: 150, editable: true, filter: true },
+      { field: 'lead', headerName: 'Lead', minWidth: 92, editable: true, filter: true },
       {
         colId: 'actions',
         headerName: 'Actions',
-        width: 100,
+        width: 64,
         pinned: 'right',
         cellRenderer: (params: ICellRendererParams) => (
           params.node.rowPinned === 'bottom' ? null : (
@@ -236,22 +243,33 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
   );
 
   useEffect(() => {
-    setVisibleColumnIds((current) => {
-      const nextIds = columnVisibilityOptions.map((column) => column.id);
-      if (current.length === 0) {
-        return nextIds;
-      }
+    setLayoutReady(false);
+    const allIds = columnVisibilityOptions.map((column) => column.id);
+    const stored = loadColumnLayout(layoutStorageKey);
+    const nextOrderedIds = mergeOrderedIds(allIds, stored?.order);
+    const nextVisibleIds = mergeVisibleIds(nextOrderedIds, stored?.visible);
 
-      const retained = current.filter((id) => nextIds.includes(id));
-      const missing = nextIds.filter((id) => !retained.includes(id));
-      return [...retained, ...missing];
-    });
-  }, [columnVisibilityOptions]);
+    setOrderedColumnIds(nextOrderedIds);
+    setVisibleColumnIds(nextVisibleIds);
+    setLayoutReady(true);
+  }, [columnVisibilityOptions, layoutStorageKey]);
 
   const visibleColumnDefs = useMemo(() => {
     const visibleIdSet = new Set(visibleColumnIds);
-    return columnDefs.filter((column) => visibleIdSet.has(getColumnVisibilityId(column)));
-  }, [columnDefs, visibleColumnIds]);
+    const orderedIdSet = orderedColumnIds.length > 0 ? orderedColumnIds : columnDefs.map((column) => getColumnVisibilityId(column));
+
+    return orderedIdSet
+      .map((id) => columnDefs.find((column) => getColumnVisibilityId(column) === id))
+      .filter((column): column is ColDef<GridBilling> => Boolean(column) && visibleIdSet.has(getColumnVisibilityId(column)));
+  }, [columnDefs, orderedColumnIds, visibleColumnIds]);
+
+  useEffect(() => {
+    if (!layoutReady || orderedColumnIds.length === 0) return;
+    saveColumnLayout(layoutStorageKey, {
+      order: orderedColumnIds,
+      visible: visibleColumnIds,
+    });
+  }, [layoutReady, layoutStorageKey, orderedColumnIds, visibleColumnIds]);
 
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
     const { data, colDef, newValue, node } = event;
@@ -400,6 +418,17 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
           pinnedBottomRowData={pinnedBottomRowData}
           columnDefs={visibleColumnDefs}
           onCellValueChanged={onCellValueChanged}
+          onColumnMoved={(event: ColumnMovedEvent) => {
+            if (!event.finished) return;
+
+            const displayedIds = event.api.getAllDisplayedColumns().map((column) => column.getColId());
+            setOrderedColumnIds((current) => {
+              const fallback = columnDefs.map((column) => getColumnVisibilityId(column));
+              const base = current.length > 0 ? current : fallback;
+              const hiddenIds = base.filter((id) => !displayedIds.includes(id));
+              return [...displayedIds, ...hiddenIds];
+            });
+          }}
           getRowStyle={getRowStyle}
           quickFilterText={searchText}
           defaultColDef={{
@@ -407,7 +436,10 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
             filter: false,
             resizable: true,
             flex: 1,
+            cellStyle: { textAlign: 'left', paddingLeft: '6px', paddingRight: '6px' },
           }}
+          rowHeight={28}
+          headerHeight={34}
           animateRows={true}
         />
       </div>
