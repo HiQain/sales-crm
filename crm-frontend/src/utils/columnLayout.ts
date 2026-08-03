@@ -1,6 +1,13 @@
+export interface StoredCustomColumn {
+  id: string;
+  label: string;
+}
+
 export interface StoredColumnLayout {
   order: string[];
   visible: string[];
+  widths?: Record<string, number>;
+  customColumns?: StoredCustomColumn[];
 }
 
 export function loadColumnLayout(storageKey: string): StoredColumnLayout | null {
@@ -14,6 +21,25 @@ export function loadColumnLayout(storageKey: string): StoredColumnLayout | null 
     return {
       order: parsed.order.map(String),
       visible: parsed.visible.map(String),
+      widths: parsed.widths && typeof parsed.widths === 'object'
+        ? Object.fromEntries(
+            Object.entries(parsed.widths).flatMap(([id, width]) => {
+              const normalizedWidth = Number(width);
+              return Number.isFinite(normalizedWidth) && normalizedWidth > 0
+                ? [[String(id), normalizedWidth]]
+                : [];
+            }),
+          )
+        : {},
+      customColumns: Array.isArray(parsed.customColumns)
+        ? parsed.customColumns.flatMap((column) => {
+            if (!column || typeof column !== 'object') return [];
+
+            const id = 'id' in column ? String(column.id ?? '').trim() : '';
+            const label = 'label' in column ? String(column.label ?? '').trim() : '';
+            return id && label ? [{ id, label }] : [];
+          })
+        : [],
     };
   } catch {
     return null;

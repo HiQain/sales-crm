@@ -4,6 +4,7 @@ import type {
   ColDef,
   CellValueChangedEvent,
   ColumnMovedEvent,
+  ColumnResizedEvent,
   RowClassParams,
   ICellRendererParams,
   ValueParserParams,
@@ -21,13 +22,21 @@ import ColumnVisibilityMenu, { getColumnVisibilityId } from '../../components/Co
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LeadDateFilter from '../../components/LeadDateFilter';
 import { filterLeadsByDate, type LeadDateFilter as LeadDateFilterValue } from '../../utils/leadDateFilter';
+import {
+  createCustomColumnId,
+  loadCustomColumnValues,
+  pickCustomColumnValues,
+  saveCustomColumnValues,
+  type CustomColumnDefinition,
+  type CustomColumnValues,
+} from '../../utils/customColumns';
 import { formatDateDisplay } from '../../utils/date';
 import { normalizeUsPhoneForStorage } from '../../utils/phone';
 import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../../utils/columnLayout';
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
-type GridLead = Lead & { __isDraft?: boolean };
+type GridLead = Lead & { __isDraft?: boolean; [key: string]: unknown };
 
 const glassTheme = themeQuartz.withParams({
   backgroundColor: 'rgba(255, 255, 255)',
@@ -81,6 +90,9 @@ const dividerStyle = {
 };
 const RESIZE_MIN_WIDTH = 56;
 
+const areStringArraysEqual = (left: string[], right: string[]) =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+
 const withNormalizedLead = (lead: GridLead): GridLead => ({
   ...lead,
   contact: normalizeUsPhoneForStorage(lead.contact) ?? lead.contact,
@@ -88,6 +100,7 @@ const withNormalizedLead = (lead: GridLead): GridLead => ({
 
 export default function MyLeadsPage() {
   const layoutStorageKey = 'crm:employee-leads';
+  const customValuesStorageKey = `${layoutStorageKey}:custom-values`;
   const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
@@ -97,6 +110,9 @@ export default function MyLeadsPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [orderedColumnIds, setOrderedColumnIds] = useState<string[]>([]);
   const [visibleColumnIds, setVisibleColumnIds] = useState<string[]>([]);
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
+  const [customColumns, setCustomColumns] = useState<CustomColumnDefinition[]>([]);
+  const [customColumnValues, setCustomColumnValues] = useState<CustomColumnValues>(() => loadCustomColumnValues(customValuesStorageKey));
   const [layoutReady, setLayoutReady] = useState(false);
 
   const user = useMemo(() => {
@@ -148,7 +164,13 @@ export default function MyLeadsPage() {
 
   const columnDefs = useMemo<ColDef<GridLead>[]>(() => {
     const columns: ColDef<GridLead>[] = [
-      { field: 'contact', headerName: 'Contact', minWidth: 150, editable: true },
+      {
+        field: 'contact',
+        headerName: 'Contact',
+        minWidth: 150,
+        editable: true,
+        cellStyle: { textAlign: 'right', paddingLeft: '6px', paddingRight: '6px' },
+      },
       { field: 'email', headerName: 'Email', minWidth: 120, editable: true },
       { field: 'business_name', headerName: 'Business Name', minWidth: 150, editable: true },
       { field: 'service', headerName: 'Service', minWidth: 120, editable: true, filter: true },
@@ -169,7 +191,16 @@ export default function MyLeadsPage() {
         cellEditor: 'agLargeTextCellEditor',
         valueFormatter: (params) => formatDateDisplay(params.value) || params.value || '',
       },
-      { field: 'lead_value', headerName: 'Value', minWidth: 180, editable: true, valueParser: numberParser, valueFormatter: currencyFormatter, cellClass: 'text-right font-mono font-bold' },
+      {
+        field: 'lead_value',
+        headerName: 'Value',
+        minWidth: 180,
+        editable: true,
+        valueParser: numberParser,
+        valueFormatter: currencyFormatter,
+        cellClass: 'font-mono font-bold',
+        cellStyle: { textAlign: 'right', paddingLeft: '6px', paddingRight: '6px' },
+      },
       {
         field: 'lead_status',
         headerName: 'Status',
@@ -179,6 +210,14 @@ export default function MyLeadsPage() {
         cellEditor: 'agSelectCellEditor',
         cellEditorParams: { values: ['pending', 'contacted', 'paid', 'failed'] }
       },
+      ...customColumns.map<ColDef<GridLead>>((column) => ({
+        colId: column.id,
+        field: column.id,
+        headerName: column.label,
+        minWidth: 140,
+        editable: true,
+        filter: true,
+      })),
       {
         colId: 'actions',
         headerName: 'Actions',
@@ -200,47 +239,91 @@ export default function MyLeadsPage() {
     return columns.map((column, index) => ({
       ...column,
       minWidth: 'width' in column && column.width ? column.minWidth : RESIZE_MIN_WIDTH,
-      cellStyle: index === columns.length - 1 ? undefined : dividerStyle,
-      headerStyle: index === columns.length - 1 ? undefined : dividerStyle,
+      cellStyle: index === columns.length - 1
+        ? column.cellStyle
+        : { ...(typeof column.cellStyle === 'object' ? column.cellStyle : {}), ...dividerStyle },
+      headerStyle: index === columns.length - 1
+        ? column.headerStyle
+        : { ...(typeof column.headerStyle === 'object' ? column.headerStyle : {}), ...dividerStyle },
     }));
-  }, [deleteLead]);
+  }, [customColumns, deleteLead]);
 
   const columnVisibilityOptions = useMemo(
     () => columnDefs.map((column) => ({
       id: getColumnVisibilityId(column),
       label: String(column.headerName ?? column.field ?? column.colId ?? 'Column'),
+      isCustom: customColumns.some((customColumn) => customColumn.id === getColumnVisibilityId(column)),
     })),
-    [columnDefs],
+    [columnDefs, customColumns],
   );
 
   useEffect(() => {
     setLayoutReady(false);
-    const allIds = columnVisibilityOptions.map((column) => column.id);
     const stored = loadColumnLayout(layoutStorageKey);
-    const nextOrderedIds = mergeOrderedIds(allIds, stored?.order);
-    const nextVisibleIds = mergeVisibleIds(nextOrderedIds, stored?.visible);
 
-    setOrderedColumnIds(nextOrderedIds);
-    setVisibleColumnIds(nextVisibleIds);
+    setOrderedColumnIds(stored?.order ?? []);
+    setVisibleColumnIds(stored?.visible ?? []);
+    setColumnWidths(stored?.widths ?? {});
+    setCustomColumns(stored?.customColumns ?? []);
+    setCustomColumnValues(loadCustomColumnValues(customValuesStorageKey));
     setLayoutReady(true);
-  }, [columnVisibilityOptions, layoutStorageKey]);
+  }, [customValuesStorageKey, layoutStorageKey]);
+
+  useEffect(() => {
+    if (!layoutReady) return;
+
+    const allIds = columnVisibilityOptions.map((column) => column.id);
+    const nextOrderedIds = mergeOrderedIds(allIds, orderedColumnIds);
+    const nextVisibleIds = mergeVisibleIds(nextOrderedIds, visibleColumnIds);
+
+    if (!areStringArraysEqual(nextOrderedIds, orderedColumnIds)) {
+      setOrderedColumnIds(nextOrderedIds);
+    }
+
+    if (!areStringArraysEqual(nextVisibleIds, visibleColumnIds)) {
+      setVisibleColumnIds(nextVisibleIds);
+    }
+  }, [columnVisibilityOptions, layoutReady, orderedColumnIds, visibleColumnIds]);
 
   const visibleColumnDefs = useMemo(() => {
     const visibleIdSet = new Set(visibleColumnIds);
     const orderedIdSet = orderedColumnIds.length > 0 ? orderedColumnIds : columnDefs.map((column) => getColumnVisibilityId(column));
 
     return orderedIdSet
-      .map((id) => columnDefs.find((column) => getColumnVisibilityId(column) === id))
+      .map((id) => {
+        const column = columnDefs.find((candidate) => getColumnVisibilityId(candidate) === id);
+        if (!column) return null;
+
+        const savedWidth = columnWidths[id];
+        if (!savedWidth) return column;
+
+        return {
+          ...column,
+          width: savedWidth,
+          flex: undefined,
+        };
+      })
       .filter((column): column is ColDef<GridLead> => Boolean(column) && visibleIdSet.has(getColumnVisibilityId(column)));
-  }, [columnDefs, orderedColumnIds, visibleColumnIds]);
+  }, [columnDefs, columnWidths, orderedColumnIds, visibleColumnIds]);
 
   useEffect(() => {
     if (!layoutReady || orderedColumnIds.length === 0) return;
     saveColumnLayout(layoutStorageKey, {
       order: orderedColumnIds,
       visible: visibleColumnIds,
+      widths: columnWidths,
+      customColumns,
     });
-  }, [layoutReady, layoutStorageKey, orderedColumnIds, visibleColumnIds]);
+  }, [columnWidths, customColumns, layoutReady, layoutStorageKey, orderedColumnIds, visibleColumnIds]);
+
+  useEffect(() => {
+    saveCustomColumnValues(customValuesStorageKey, customColumnValues);
+  }, [customColumnValues, customValuesStorageKey]);
+
+  const customColumnIdSet = useMemo(
+    () => new Set(customColumns.map((column) => column.id)),
+    [customColumns],
+  );
 
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
     if (!user) return;
@@ -248,6 +331,24 @@ export default function MyLeadsPage() {
     const { data, colDef, newValue, oldValue, node } = event;
     const field = colDef.field;
     if (!field) return;
+
+    if (customColumnIdSet.has(field)) {
+      const customValue = String(newValue ?? '');
+
+      if (node.rowPinned === 'bottom') {
+        setDraftRow((prev) => ({ ...prev, [field]: customValue }));
+        return;
+      }
+
+      setCustomColumnValues((prev) => ({
+        ...prev,
+        [String(data.id)]: {
+          ...(prev[String(data.id)] ?? {}),
+          [field]: customValue,
+        },
+      }));
+      return;
+    }
 
     const normalizedValue = field === 'contact'
       ? normalizeUsPhoneForStorage(newValue)
@@ -268,10 +369,11 @@ export default function MyLeadsPage() {
       }
 
       const nextDraft = withNormalizedLead({ ...draftRow, [field]: nextValue });
+      const draftCustomValues = pickCustomColumnValues(nextDraft, customColumns);
       setDraftRow(createEmptyLead());
 
       try {
-        await apiClient.post('/leads', {
+        const response = await apiClient.post('/leads', {
           contact: nextDraft.contact || '',
           email: nextDraft.email,
           business_owner: nextDraft.business_owner,
@@ -284,6 +386,17 @@ export default function MyLeadsPage() {
           lead_status: nextDraft.lead_status || 'pending',
           assigned_user: Number(user.id)
         });
+
+        const createdLeadId = response.data?.id;
+        if (createdLeadId != null && Object.keys(draftCustomValues).length > 0) {
+          setCustomColumnValues((prev) => ({
+            ...prev,
+            [String(createdLeadId)]: {
+              ...(prev[String(createdLeadId)] ?? {}),
+              ...draftCustomValues,
+            },
+          }));
+        }
         fetchData();
       } catch (error) {
         console.error('Create failed:', error);
@@ -304,10 +417,63 @@ export default function MyLeadsPage() {
       console.error('Update failed:', error);
       fetchData();
     }
-  }, [draftRow, fetchData, user]);
+  }, [customColumnIdSet, customColumns, draftRow, fetchData, user]);
 
-  const filteredRowData = useMemo(() => filterLeadsByDate(rowData, dateFilter), [rowData, dateFilter]);
+  const filteredRowData = useMemo(() => {
+    const rowsWithCustomValues = rowData.map((row) => ({
+      ...row,
+      ...(customColumnValues[String(row.id)] ?? {}),
+    }));
+
+    return filterLeadsByDate(rowsWithCustomValues, dateFilter);
+  }, [customColumnValues, dateFilter, rowData]);
   const pinnedBottomRowData = useMemo(() => [draftRow], [draftRow]);
+
+  const handleAddCustomColumn = useCallback((label: string) => {
+    const trimmedLabel = label.trim();
+    if (!trimmedLabel) return;
+
+    const normalizedLabel = trimmedLabel.toLowerCase();
+    const labelExists = columnVisibilityOptions.some((column) => column.label.toLowerCase() === normalizedLabel);
+    if (labelExists) return;
+
+    const customColumn = {
+      id: createCustomColumnId(trimmedLabel),
+      label: trimmedLabel,
+    };
+
+    setCustomColumns((current) => [...current, customColumn]);
+    setOrderedColumnIds((current) => {
+      const nextIds = current.filter((id) => id !== 'actions');
+      return [...nextIds, customColumn.id, 'actions'];
+    });
+    setVisibleColumnIds((current) => [...current, customColumn.id]);
+  }, [columnVisibilityOptions]);
+
+  const handleDeleteCustomColumn = useCallback((columnId: string) => {
+    setCustomColumns((current) => current.filter((column) => column.id !== columnId));
+    setOrderedColumnIds((current) => current.filter((id) => id !== columnId));
+    setVisibleColumnIds((current) => current.filter((id) => id !== columnId));
+    setColumnWidths((current) => {
+      const next = { ...current };
+      delete next[columnId];
+      return next;
+    });
+    setCustomColumnValues((current) => (
+      Object.fromEntries(
+        Object.entries(current).map(([rowId, values]) => {
+          const nextValues = { ...values };
+          delete nextValues[columnId];
+          return [rowId, nextValues];
+        }),
+      )
+    ));
+    setDraftRow((current) => {
+      const next = { ...current };
+      delete next[columnId];
+      return next;
+    });
+  }, []);
 
   const getRowStyle = useCallback((params: RowClassParams<GridLead>) => {
     if (params.node.rowPinned === 'bottom') {
@@ -349,6 +515,8 @@ export default function MyLeadsPage() {
           <ColumnVisibilityMenu
             columns={columnVisibilityOptions}
             visibleColumnIds={visibleColumnIds}
+            onAddColumn={handleAddCustomColumn}
+            onDeleteColumn={handleDeleteCustomColumn}
             onToggle={(columnId) => {
               setVisibleColumnIds((current) =>
                 current.includes(columnId)
@@ -414,9 +582,21 @@ export default function MyLeadsPage() {
               return [...displayedIds, ...hiddenIds];
             });
           }}
+          onColumnResized={(event: ColumnResizedEvent) => {
+            if (!event.finished) return;
+
+            const nextWidths = event.api.getColumns()?.reduce<Record<string, number>>((acc, column) => {
+              acc[column.getColId()] = column.getActualWidth();
+              return acc;
+            }, {});
+
+            if (nextWidths) {
+              setColumnWidths(nextWidths);
+            }
+          }}
           getRowStyle={getRowStyle}
           quickFilterText={searchText}
-          defaultColDef={{ sortable: false, filter: false, resizable: true, flex: 1 }}
+          defaultColDef={{ sortable: false, filter: false, resizable: true }}
           animateRows={true}
         />
       </div>

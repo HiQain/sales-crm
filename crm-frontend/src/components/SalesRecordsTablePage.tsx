@@ -4,6 +4,7 @@ import type {
   CellValueChangedEvent,
   ColDef,
   ColumnMovedEvent,
+  ColumnResizedEvent,
   ICellRendererParams,
   RowClassParams,
   ValueFormatterParams,
@@ -122,6 +123,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
   const [recordPendingDelete, setRecordPendingDelete] = useState<number | string | null>(null);
   const [orderedColumnIds, setOrderedColumnIds] = useState<string[]>([]);
   const [visibleColumnIds, setVisibleColumnIds] = useState<string[]>([]);
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [layoutReady, setLayoutReady] = useState(false);
 
   const user = useMemo(() => {
@@ -187,7 +189,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
       { field: 'email', headerName: 'Email', minWidth: 118, editable: true },
       { field: 'phone', headerName: 'Phone', minWidth: 105, editable: true },
       { field: 'sales', headerName: 'Sales', minWidth: 92, editable: true },
-      { field: 'lead', headerName: 'Lead', minWidth: 92, editable: true, filter: true },
+      { field: 'lead', headerName: 'Representative', minWidth: 92, editable: true, filter: true },
       { field: 'service', headerName: 'Service', minWidth: 92, editable: true, filter: true },
       {
         field: 'status',
@@ -267,6 +269,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
 
     setOrderedColumnIds(nextOrderedIds);
     setVisibleColumnIds(nextVisibleIds);
+    setColumnWidths(stored?.widths ?? {});
     setLayoutReady(true);
   }, [columnVisibilityOptions, layoutStorageKey]);
 
@@ -275,17 +278,30 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
     const orderedIdSet = orderedColumnIds.length > 0 ? orderedColumnIds : columnDefs.map((column) => getColumnVisibilityId(column));
 
     return orderedIdSet
-      .map((id) => columnDefs.find((column) => getColumnVisibilityId(column) === id))
+      .map((id) => {
+        const column = columnDefs.find((candidate) => getColumnVisibilityId(candidate) === id);
+        if (!column) return null;
+
+        const savedWidth = columnWidths[id];
+        if (!savedWidth) return column;
+
+        return {
+          ...column,
+          width: savedWidth,
+          flex: undefined,
+        };
+      })
       .filter((column): column is ColDef<GridClientJourney> => Boolean(column) && visibleIdSet.has(getColumnVisibilityId(column)));
-  }, [columnDefs, orderedColumnIds, visibleColumnIds]);
+  }, [columnDefs, columnWidths, orderedColumnIds, visibleColumnIds]);
 
   useEffect(() => {
     if (!layoutReady || orderedColumnIds.length === 0) return;
     saveColumnLayout(layoutStorageKey, {
       order: orderedColumnIds,
       visible: visibleColumnIds,
+      widths: columnWidths,
     });
-  }, [layoutReady, layoutStorageKey, orderedColumnIds, visibleColumnIds]);
+  }, [columnWidths, layoutReady, layoutStorageKey, orderedColumnIds, visibleColumnIds]);
 
   const onCellValueChanged = useCallback(async (event: CellValueChangedEvent) => {
     const { data, colDef, newValue, oldValue, node } = event;
@@ -456,13 +472,24 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
               return [...displayedIds, ...hiddenIds];
             });
           }}
+          onColumnResized={(event: ColumnResizedEvent) => {
+            if (!event.finished) return;
+
+            const nextWidths = event.api.getColumns()?.reduce<Record<string, number>>((acc, column) => {
+              acc[column.getColId()] = column.getActualWidth();
+              return acc;
+            }, {});
+
+            if (nextWidths) {
+              setColumnWidths(nextWidths);
+            }
+          }}
           getRowStyle={getRowStyle}
           quickFilterText={searchText}
           defaultColDef={{
             sortable: false,
             filter: false,
             resizable: true,
-            flex: 1,
             cellStyle: { textAlign: 'left', paddingLeft: '6px', paddingRight: '6px' },
           }}
           rowHeight={28}

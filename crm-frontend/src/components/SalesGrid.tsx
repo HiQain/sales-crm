@@ -111,7 +111,7 @@ export default function SalesGrid() {
     },
     { 
       field: 'leadOwner', 
-      headerName: 'Lead (Owner)', 
+      headerName: 'Representative', 
       width: 140, 
       editable: true,
       filter: true,
