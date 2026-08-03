@@ -7,15 +7,16 @@ import type {
   ICellRendererParams,
 } from 'ag-grid-community';
 import { 
-  AllCommunityModule, 
   ModuleRegistry,
   themeQuartz,
 } from 'ag-grid-community';
+import { AllEnterpriseModule } from 'ag-grid-enterprise';
 import apiClient from '../api/client';
+import { handleGridCellCopy } from '../utils/gridClipboard';
 import { Loader2 } from 'lucide-react';
 
 // Register all modules
-ModuleRegistry.registerModules([AllCommunityModule]);
+ModuleRegistry.registerModules([AllEnterpriseModule]);
 
 interface Lead {
   id: number;
@@ -225,13 +226,21 @@ export default function SalesGrid() {
             theme={myTheme}
             rowData={rowData}
             columnDefs={columnDefs}
+            suppressCellFocus={false}
+            cellSelection={{
+              suppressMultiRanges: true,
+            }}
             onCellValueChanged={onCellValueChanged}
+            onCellKeyDown={(event) => {
+              void handleGridCellCopy(event);
+            }}
             getRowStyle={getRowStyle}
             quickFilterText={searchText}
             defaultColDef={{
               sortable: false,
               filter: false,
               resizable: true,
+              suppressHeaderMenuButton: true,
               flex: 1,
               minWidth: 100,
             }}

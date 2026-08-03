@@ -11,10 +11,10 @@ import type {
   ValueParserParams,
 } from 'ag-grid-community';
 import {
-  AllCommunityModule,
   ModuleRegistry,
   themeQuartz,
 } from 'ag-grid-community';
+import { AllEnterpriseModule } from 'ag-grid-enterprise';
 import {
   CheckCircle,
   Loader2,
@@ -30,10 +30,11 @@ import ConfirmDialog from './ConfirmDialog';
 import LeadDateFilter from './LeadDateFilter';
 import { filterItemsByDate, type LeadDateFilter as DateFilterValue } from '../utils/leadDateFilter';
 import { formatDateDisplay } from '../utils/date';
+import { handleGridCellCopy } from '../utils/gridClipboard';
 import { normalizeUsPhoneForStorage } from '../utils/phone';
 import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../utils/columnLayout';
 
-ModuleRegistry.registerModules([AllCommunityModule]);
+ModuleRegistry.registerModules([AllEnterpriseModule]);
 
 type GridClientJourney = ClientJourney & { __isDraft?: boolean };
 
@@ -460,6 +461,10 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
           rowData={filteredRowData}
           pinnedBottomRowData={pinnedBottomRowData}
           columnDefs={visibleColumnDefs}
+          suppressCellFocus={false}
+          cellSelection={{
+            suppressMultiRanges: true,
+          }}
           onCellValueChanged={onCellValueChanged}
           onColumnMoved={(event: ColumnMovedEvent) => {
             if (!event.finished) return;
@@ -484,12 +489,16 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
               setColumnWidths(nextWidths);
             }
           }}
+          onCellKeyDown={(event) => {
+            void handleGridCellCopy(event);
+          }}
           getRowStyle={getRowStyle}
           quickFilterText={searchText}
           defaultColDef={{
             sortable: false,
             filter: false,
             resizable: true,
+            suppressHeaderMenuButton: true,
             cellStyle: { textAlign: 'left', paddingLeft: '6px', paddingRight: '6px' },
           }}
           rowHeight={28}

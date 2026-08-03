@@ -11,12 +11,12 @@ import type {
   ValueFormatterParams
 } from 'ag-grid-community';
 import {
-  AllCommunityModule,
   ModuleRegistry,
   themeQuartz,
 } from 'ag-grid-community';
+import { AllEnterpriseModule } from 'ag-grid-enterprise';
 import apiClient from '../../api/client';
-import { Loader2, Search, Trash2, TrendingUp, CheckCircle, Clock, Table } from 'lucide-react';
+import { Loader2, Search, Trash2 } from 'lucide-react';
 import { Lead } from '../../types';
 import ColumnVisibilityMenu, { getColumnVisibilityId } from '../../components/ColumnVisibilityMenu';
 import ConfirmDialog from '../../components/ConfirmDialog';
@@ -31,10 +31,11 @@ import {
   type CustomColumnValues,
 } from '../../utils/customColumns';
 import { formatDateDisplay } from '../../utils/date';
+import { handleGridCellCopy } from '../../utils/gridClipboard';
 import { normalizeUsPhoneForStorage } from '../../utils/phone';
 import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../../utils/columnLayout';
 
-ModuleRegistry.registerModules([AllCommunityModule]);
+ModuleRegistry.registerModules([AllEnterpriseModule]);
 
 type GridLead = Lead & { __isDraft?: boolean; [key: string]: unknown };
 
@@ -505,19 +506,8 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     });
   }, []);
 
-  const stats = useMemo(() => {
-    const total = filteredRowData.length;
-    const paid = filteredRowData.filter(l => l.lead_status === 'paid').length;
-    const active = total - paid;
-    const totalValue = filteredRowData.reduce((acc, curr) => acc + (Number(curr.lead_value) || 0), 0);
-    const paidValue = filteredRowData
-      .filter(l => l.lead_status === 'paid')
-      .reduce((acc, curr) => acc + (Number(curr.lead_value) || 0), 0);
-    return { total, paid, active, totalValue, paidValue };
-  }, [filteredRowData]);
-
   return (
-    <div className="p-6 h-full flex flex-col space-y-4 animate-in fade-in duration-500">
+    <div className="p-2 h-full flex flex-col space-y-2 animate-in fade-in duration-500">
       <ConfirmDialog
         open={leadPendingDelete != null}
         title="Delete lead?"
@@ -535,6 +525,16 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         </div>
 
         <div className="flex items-center gap-3">
+          <div className="relative group">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-400 transition-colors" size={18} />
+            <input
+              type="text"
+              placeholder="Search leads..."
+              className="bg-white/30 backdrop-blur-[12px] border border-white/20 pl-10 pr-4 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-72 shadow-sm transition-all"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+            />
+          </div>
           <ColumnVisibilityMenu
             columns={columnVisibilityOptions}
             visibleColumnIds={visibleColumnIds}
@@ -549,38 +549,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             }}
           />
           <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
-          <div className="relative group">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-400 transition-colors" size={18} />
-            <input
-              type="text"
-              placeholder="Search leads..."
-              className="bg-white/30 backdrop-blur-[12px] border border-white/20 pl-10 pr-4 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm transition-all"
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-            />
-          </div>
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        {[
-          { label: 'Total Leads', val: stats.total, icon: Table, color: 'text-indigo-600' },
-          { label: 'Active Leads', val: stats.active, icon: Clock, color: 'text-slate-600' },
-          { label: 'Paid Leads', val: stats.paid, icon: CheckCircle, color: 'text-green-700' },
-          { label: 'Paid Revenue', val: `$${stats.paidValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: CheckCircle, color: 'text-emerald-700' },
-          { label: 'Total Revenue', val: `$${stats.totalValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: TrendingUp, color: 'text-indigo-700' },
-        ].map((stat) => (
-          <div key={stat.label} className="bg-white/40 backdrop-blur-[20px] border border-white/30 p-4 rounded-2xl flex items-center gap-4 shadow-sm relative overflow-hidden group">
-            <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-            <div className={`p-2 rounded-xl bg-white/40 border border-white/50 ${stat.color} relative z-10`}>
-              <stat.icon size={24} />
-            </div>
-            <div className="relative z-10">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{stat.label}</p>
-              <p className={`text-xl font-bold ${stat.color}`}>{stat.val}</p>
-            </div>
-          </div>
-        ))}
       </div>
 
       <div className="flex-1 bg-white/40 backdrop-blur-[20px] border border-white/30 rounded-2xl shadow-xl overflow-hidden flex flex-col min-h-[400px]">
@@ -595,6 +564,10 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             rowData={filteredRowData}
             pinnedBottomRowData={pinnedBottomRowData}
             columnDefs={visibleColumnDefs}
+            suppressCellFocus={false}
+            cellSelection={{
+              suppressMultiRanges: true,
+            }}
             onCellValueChanged={onCellValueChanged}
             onColumnMoved={(event: ColumnMovedEvent) => {
               if (!event.finished) return;
@@ -619,12 +592,16 @@ export default function LeadsPage({ userId }: { userId?: string }) {
                 setColumnWidths(nextWidths);
               }
             }}
+            onCellKeyDown={(event) => {
+              void handleGridCellCopy(event);
+            }}
             getRowStyle={getRowStyle}
             quickFilterText={searchText}
             defaultColDef={{
               sortable: false,
               filter: false,
               resizable: true,
+              suppressHeaderMenuButton: true,
               cellStyle: { textAlign: 'left', paddingLeft: '6px', paddingRight: '6px' },
             }}
             rowHeight={28}
