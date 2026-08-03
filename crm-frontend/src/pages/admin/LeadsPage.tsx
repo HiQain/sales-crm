@@ -180,7 +180,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         headerName: 'Contact',
         minWidth: 112,
         editable: true,
-        cellStyle: { textAlign: 'right', paddingLeft: '6px', paddingRight: '6px' },
       },
       { field: 'email', headerName: 'Email', minWidth: 118, editable: true },
       { field: 'business_owner', headerName: 'Business Owner', minWidth: 118, editable: true },

@@ -169,7 +169,6 @@ export default function MyLeadsPage() {
         headerName: 'Contact',
         minWidth: 150,
         editable: true,
-        cellStyle: { textAlign: 'right', paddingLeft: '6px', paddingRight: '6px' },
       },
       { field: 'email', headerName: 'Email', minWidth: 120, editable: true },
       { field: 'business_name', headerName: 'Business Name', minWidth: 150, editable: true },
