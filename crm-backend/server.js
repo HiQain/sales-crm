@@ -21,12 +21,21 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-const fallbackOrigins = ['http://localhost:5173', 'http://localhost:3000', 'https://crm.hiqain.com'];
+const fallbackOrigins = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:3001',
+  'https://crm.hiqain.com',
+];
 const corsOrigins = allowedOrigins.length > 0 ? allowedOrigins : fallbackOrigins;
+const localDevOriginPattern = /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/;
 
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || corsOrigins.includes(origin)) {
+    if (!origin || corsOrigins.includes(origin) || localDevOriginPattern.test(origin)) {
       callback(null, true);
       return;
     }
