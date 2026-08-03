@@ -1,7 +1,6 @@
-import { CreditCard, KeyRound, LogOut, Route, Target, Users } from 'lucide-react';
+import { CreditCard, LogOut, Route, Target, Users } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import ChangePasswordModal from './ChangePassword';
 
 interface TopNavProps {
   role: 'admin' | 'employee';
@@ -12,7 +11,6 @@ export default function TopNav({ role }: TopNavProps) {
   const userStr = localStorage.getItem('user');
   const user = userStr ? JSON.parse(userStr) : null;
   const [menuOpen, setMenuOpen] = useState(false);
-  const [passwordOpen, setPasswordOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const basePath = role === 'admin' ? '/admin' : '/employee';
@@ -30,8 +28,6 @@ export default function TopNav({ role }: TopNavProps) {
   const displayName = user?.username || user?.name || 'User';
   const displayRole = role === 'admin' ? 'Admin' : 'Employee';
   const displayEmail = user?.email || `${String(displayName).toLowerCase()}@hiqain.com`;
-  const userId = Number(user?.id ?? 0);
-
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) {
@@ -102,21 +98,6 @@ export default function TopNav({ role }: TopNavProps) {
                 <p className="text-[18px] font-medium leading-none text-slate-800">{displayRole}</p>
                 <p className="mt-1 text-sm text-slate-500">{displayEmail}</p>
               </div>
-
-              <div className="border-t border-slate-200">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setPasswordOpen(true);
-                  }}
-                  className="flex w-full items-center gap-3 px-4 py-3 text-left text-[15px] text-slate-800 transition-colors hover:bg-slate-50"
-                >
-                  <KeyRound className="h-4 w-4" />
-                  <span>Change Password</span>
-                </button>
-              </div>
-
               <div className="border-t border-slate-200">
                 <button
                   type="button"
@@ -132,12 +113,6 @@ export default function TopNav({ role }: TopNavProps) {
         </div>
       </div>
 
-      <ChangePasswordModal
-        userId={userId}
-        username={displayName}
-        open={passwordOpen}
-        onClose={() => setPasswordOpen(false)}
-      />
     </header>
   );
 }
