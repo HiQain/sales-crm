@@ -210,7 +210,7 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
         valueFormatter: currencyFormatter,
         cellClass: 'text-left font-mono font-bold',
       },
-      { field: 'lead', headerName: 'Representative', minWidth: 92, editable: true, filter: true },
+      { field: 'lead', headerName: 'Agent', minWidth: 92, editable: true, filter: true },
       {
         colId: 'actions',
         headerName: 'Actions',
@@ -394,7 +394,7 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
             <input
               type="text"
               placeholder="Search billings..."
-              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-xl text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm transition-all"
+              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-md text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm transition-all"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
             />

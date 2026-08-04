@@ -190,7 +190,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
       { field: 'email', headerName: 'Email', minWidth: 118, editable: true },
       { field: 'phone', headerName: 'Phone', minWidth: 105, editable: true },
       { field: 'sales', headerName: 'Sales', minWidth: 92, editable: true },
-      { field: 'lead', headerName: 'Representative', minWidth: 92, editable: true, filter: true },
+      { field: 'lead', headerName: 'Agent', minWidth: 92, editable: true, filter: true },
       { field: 'service', headerName: 'Service', minWidth: 92, editable: true, filter: true },
       {
         field: 'status',
@@ -420,7 +420,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
             <input
               type="text"
               placeholder="Search client journeys..."
-              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-xl text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm transition-all"
+              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-md text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm transition-all"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
             />

@@ -21,6 +21,7 @@ export interface Lead {
   ns: string;
   business_owner: string;
   business_name: string;
+  source: string;
   service: string;
   notes: string;
   lead_value: number;

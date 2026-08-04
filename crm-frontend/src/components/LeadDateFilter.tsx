@@ -13,7 +13,7 @@ export default function LeadDateFilter({ value, onChange }: LeadDateFilterProps)
       <select
         value={value}
         onChange={(event) => onChange(event.target.value as LeadDateFilter)}
-        className="appearance-none bg-white border border-slate-300 pl-10 pr-9 py-2 rounded-xl text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm transition-all min-w-[150px]"
+        className="appearance-none bg-white border border-slate-300 pl-10 pr-9 py-2 rounded-md text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm transition-all min-w-[150px]"
       >
         {LEAD_DATE_FILTERS.map((option) => (
           <option key={option.value} value={option.value}>

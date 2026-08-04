@@ -23,7 +23,7 @@ export default function ConfirmDialog({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/35 backdrop-blur-[2px] px-4">
-      <div className="w-full max-w-md rounded-3xl border border-white/35 bg-white/80 p-6 shadow-2xl backdrop-blur-[20px]">
+      <div className="w-full max-w-md rounded-3xl border border-white/35 bg-white p-6 shadow-2xl backdrop-blur-[20px]">
         <div className="space-y-2">
           <h3 className="text-xl font-bold tracking-tight text-slate-700">{title}</h3>
           <p className="text-sm leading-6 text-slate-500">{message}</p>

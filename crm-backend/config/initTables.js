@@ -60,6 +60,7 @@ export const ensureTables = async () => {
       email VARCHAR(255) NOT NULL DEFAULT '',
       business_owner VARCHAR(255) NOT NULL DEFAULT '',
       business_name VARCHAR(255) NOT NULL DEFAULT '',
+      source VARCHAR(255) NOT NULL DEFAULT '',
       service VARCHAR(255) NOT NULL DEFAULT '',
       notes TEXT NULL,
       lead_value DECIMAL(10, 2) NOT NULL DEFAULT 0,
@@ -97,6 +98,11 @@ export const ensureTables = async () => {
   const [leadNotesColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'notes'`);
   if (leadNotesColumn.length === 0) {
     await db.execute('ALTER TABLE leads ADD COLUMN notes TEXT NULL AFTER service');
+  }
+
+  const [leadSourceColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'source'`);
+  if (leadSourceColumn.length === 0) {
+    await db.execute("ALTER TABLE leads ADD COLUMN source VARCHAR(255) NOT NULL DEFAULT '' AFTER business_name");
   }
 
   const [leadResponseColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'response'`);

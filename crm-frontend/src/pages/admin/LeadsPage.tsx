@@ -1,10 +1,11 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import type {
   ColDef,
   CellValueChangedEvent,
   ColumnMovedEvent,
   ColumnResizedEvent,
+  RowDragEndEvent,
   RowClassParams,
   ICellRendererParams,
   ValueParserParams,
@@ -16,7 +17,7 @@ import {
 } from 'ag-grid-community';
 import { AllEnterpriseModule } from 'ag-grid-enterprise';
 import apiClient from '../../api/client';
-import { Loader2, Search, Trash2 } from 'lucide-react';
+import { CalendarPlus, GripVertical, Loader2, Search, Trash2 } from 'lucide-react';
 import { Lead, User } from '../../types';
 import ColumnVisibilityMenu, { getColumnVisibilityId } from '../../components/ColumnVisibilityMenu';
 import ConfirmDialog from '../../components/ConfirmDialog';
@@ -38,6 +39,11 @@ ModuleRegistry.registerModules([AllEnterpriseModule]);
 
 type GridLead = Lead & { __isDraft?: boolean; [key: string]: unknown };
 type EmployeeOption = Pick<User, 'id' | 'username'>;
+type DateMarkerRow = GridLead & {
+  __rowType: 'date-marker';
+  markerDate: string;
+  markerDay: string;
+};
 
 const glassTheme = themeQuartz.withParams({
   backgroundColor: 'rgba(255, 255, 255)',
@@ -53,6 +59,10 @@ const glassTheme = themeQuartz.withParams({
 });
 
 const StatusBadge = (params: ICellRendererParams) => {
+  if ((params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker') {
+    return null;
+  }
+
   const value = String(params.value || '').toLowerCase();
   let baseColor = 'bg-gray-50 text-slate-700 border-gray-500/20';
 
@@ -70,6 +80,45 @@ const StatusBadge = (params: ICellRendererParams) => {
   );
 };
 
+const ActionsCellRenderer = (
+  params: ICellRendererParams<GridLead> & {
+    onDelete: (id: number | string) => void;
+  },
+) => {
+  const dragHandleRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!dragHandleRef.current || params.node.rowPinned === 'bottom') return;
+    if (typeof params.registerRowDragger !== 'function') return;
+
+    params.registerRowDragger(dragHandleRef.current, 4);
+  }, [params]);
+
+  if (params.node.rowPinned === 'bottom') {
+    return null;
+  }
+
+  return (
+    <div className="flex h-full items-center justify-center gap-1">
+      <button
+        ref={dragHandleRef}
+        type="button"
+        className="cursor-move p-1 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 rounded transition-colors"
+        aria-label="Drag row"
+      >
+        <GripVertical size={15} />
+      </button>
+      <button
+        type="button"
+        onClick={() => params.onDelete(params.data.id)}
+        className="p-1 hover:bg-rose-500/20 text-rose-500 rounded transition-colors"
+      >
+        <Trash2 size={16} />
+      </button>
+    </div>
+  );
+};
+
 const createEmptyLead = (): GridLead => ({
   id: -1,
   contact: '',
@@ -77,6 +126,7 @@ const createEmptyLead = (): GridLead => ({
   ns: '',
   business_owner: '',
   business_name: '',
+  source: '',
   service: '',
   notes: '',
   lead_value: 0,
@@ -100,14 +150,93 @@ const withNormalizedLead = (lead: GridLead): GridLead => ({
   contact: normalizeUsPhoneForStorage(lead.contact) ?? lead.contact,
 });
 
+const loadDateMarkers = (storageKey: string): DateMarkerRow[] => {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const stored = window.localStorage.getItem(storageKey);
+    if (!stored) return [];
+
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed)
+      ? parsed.map((row) => {
+          const markerDate = typeof row?.markerDate === 'string'
+            ? row.markerDate
+            : typeof row?.notes === 'string'
+              ? row.notes
+              : '';
+
+          const formatted = formatMarkerDate(markerDate);
+
+          return {
+            ...row,
+            markerDate: formatted.rawDate,
+            markerDay: formatted.markerDay,
+            notes: formatted.rawDate || '',
+          };
+        })
+      : [];
+  } catch {
+    return [];
+  }
+};
+
+const loadStoredRowOrder = (storageKey: string): string[] => {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const stored = window.localStorage.getItem(storageKey);
+    if (!stored) return [];
+
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed.map((value) => String(value)) : [];
+  } catch {
+    return [];
+  }
+};
+
+const formatMarkerDate = (dateValue: string) => {
+  const trimmedValue = String(dateValue ?? '').trim();
+  const isoMatch = trimmedValue.match(/^(\d{4}-\d{2}-\d{2})$/);
+  const parsedDate = isoMatch
+    ? new Date(`${isoMatch[1]}T00:00:00`)
+    : new Date(trimmedValue);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    return {
+      rawDate: '',
+      markerLabel: trimmedValue || 'Invalid date',
+      markerDay: '',
+    };
+  }
+
+  const rawDate = `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, '0')}-${String(parsedDate.getDate()).padStart(2, '0')}`;
+
+  return {
+    rawDate,
+    markerLabel: new Intl.DateTimeFormat('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    }).format(parsedDate),
+    markerDay: new Intl.DateTimeFormat('en-US', {
+      weekday: 'long',
+    }).format(parsedDate),
+  };
+};
+
 export default function LeadsPage({ userId }: { userId?: string }) {
   const layoutStorageKey = userId ? `crm:admin-user-leads:${userId}` : 'crm:admin-leads';
   const customValuesStorageKey = `${layoutStorageKey}:custom-values`;
+  const dateMarkerStorageKey = `${layoutStorageKey}:date-markers`;
+  const rowOrderStorageKey = `${layoutStorageKey}:row-order`;
   const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [dateFilter, setDateFilter] = useState<LeadDateFilterValue>('all');
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
+  const [dateMarkerRows, setDateMarkerRows] = useState<DateMarkerRow[]>(() => loadDateMarkers(dateMarkerStorageKey));
+  const [manualRowOrder, setManualRowOrder] = useState<string[]>(() => loadStoredRowOrder(rowOrderStorageKey));
   const [draftRow, setDraftRow] = useState<GridLead>(createEmptyLead);
   const [leadPendingDelete, setLeadPendingDelete] = useState<number | string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -165,6 +294,14 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const deleteLead = useCallback(async () => {
     if (leadPendingDelete == null) return;
     setDeleteLoading(true);
+
+    if (typeof leadPendingDelete === 'string' && leadPendingDelete.startsWith('date-marker-')) {
+      setDateMarkerRows((prev) => prev.filter((row) => row.id !== leadPendingDelete));
+      setLeadPendingDelete(null);
+      setDeleteLoading(false);
+      return;
+    }
+
     try {
       await apiClient.delete(`/leads/${leadPendingDelete}`);
       setRowData(prev => prev.filter(l => l.id !== leadPendingDelete));
@@ -176,6 +313,23 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     }
   }, [leadPendingDelete]);
 
+  const duplicateContacts = useMemo(() => {
+    const contactCounts = new Map<string, number>();
+
+    rowData.forEach((row) => {
+      const value = String(row.contact ?? '').trim();
+      if (!value) return;
+
+      contactCounts.set(value, (contactCounts.get(value) ?? 0) + 1);
+    });
+
+    return new Set(
+      Array.from(contactCounts.entries())
+        .filter(([, count]) => count > 1)
+        .map(([contact]) => contact),
+    );
+  }, [rowData]);
+
   const columnDefs = useMemo<ColDef<GridLead>[]>(() => {
     const columns: ColDef<GridLead>[] = [
       {
@@ -183,19 +337,59 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         headerName: 'Contact',
         minWidth: 112,
         editable: true,
+        cellStyle: (params) => {
+          const value = String(params.value ?? '').trim();
+
+          if (!value || !duplicateContacts.has(value)) {
+            return undefined;
+          }
+
+          return {
+            backgroundColor: '#fca5a5',
+          };
+        },
       },
       { field: 'email', headerName: 'Email', minWidth: 118, editable: true },
       { field: 'business_owner', headerName: 'Business Owner', minWidth: 118, editable: true },
       { field: 'business_name', headerName: 'Business Name', minWidth: 118, editable: true },
+      { field: 'source', headerName: 'Source', minWidth: 100, editable: true },
       { field: 'service', headerName: 'Service', minWidth: 92, editable: true, filter: true },
       {
         field: 'notes',
         headerName: 'Notes',
         minWidth: 180,
-        editable: true,
+        editable: (params) => (params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker' || true,
         cellEditor: 'agLargeTextCellEditor',
         cellEditorPopup: true,
-        cellClass: 'italic text-slate-500',
+        cellEditorSelector: (params) => (
+          (params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker'
+            ? { component: 'agDateStringCellEditor' }
+            : undefined
+        ),
+        valueFormatter: (params) => {
+          const markerRow = params.data as DateMarkerRow | undefined;
+
+          if (markerRow?.__rowType === 'date-marker' && markerRow.markerDate) {
+            const { markerLabel, markerDay } = formatMarkerDate(markerRow.markerDate);
+            return markerDay ? `${markerDay}, ${markerLabel}` : markerLabel;
+          }
+
+          return params.value;
+        },
+        cellStyle: (params) => (
+          (params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker'
+            ? {
+                textAlign: 'center',
+                fontWeight: 700,
+                color: '#78350f',
+              }
+            : undefined
+        ),
+        cellClass: (params) => (
+          (params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker'
+            ? 'text-center font-bold text-amber-900'
+            : 'italic text-slate-500'
+        ),
       },
       {
         field: 'lead_value',
@@ -203,13 +397,17 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         minWidth: 102,
         editable: true,
         valueParser: numberParser,
-        valueFormatter: currencyFormatter,
+        valueFormatter: (params) => (
+          (params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker'
+            ? ''
+            : currencyFormatter(params)
+        ),
         cellClass: 'font-mono font-bold',
         cellStyle: { textAlign: 'right', paddingLeft: '6px', paddingRight: '6px' },
       },
       {
         field: 'lead',
-        headerName: 'Representative',
+        headerName: 'Agent',
         minWidth: 92,
         editable: true,
         filter: true,
@@ -235,32 +433,36 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       {
         colId: 'actions',
         headerName: 'Actions',
-        width: 64,
+        width: 86,
         pinned: 'right',
-        cellRenderer: (params: ICellRendererParams) => (
-          params.node.rowPinned === 'bottom' ? null : (
-          <button
-            onClick={() => setLeadPendingDelete(params.data.id)}
-            className="p-1 hover:bg-rose-500/20 text-rose-500 rounded transition-colors mt-1"
-          >
-            <Trash2 size={16} />
-          </button>
-          )
-        )
+        cellRenderer: (params: ICellRendererParams<GridLead>) => (
+          <ActionsCellRenderer
+            {...params}
+            onDelete={(id) => setLeadPendingDelete(id)}
+          />
+        ),
       }
     ];
 
     return columns.map((column, index) => ({
       ...column,
       minWidth: 'width' in column && column.width ? column.minWidth : RESIZE_MIN_WIDTH,
-      cellStyle: index === columns.length - 1
-        ? column.cellStyle
-        : { ...(typeof column.cellStyle === 'object' ? column.cellStyle : {}), ...dividerStyle },
+      cellStyle: typeof column.cellStyle === 'function'
+        ? (params) => {
+            const resolvedStyle = column.cellStyle ? column.cellStyle(params) : undefined;
+
+            return index === columns.length - 1
+              ? resolvedStyle
+              : { ...(resolvedStyle ?? {}), ...dividerStyle };
+          }
+        : index === columns.length - 1
+          ? column.cellStyle
+          : { ...(typeof column.cellStyle === 'object' ? column.cellStyle : {}), ...dividerStyle },
       headerStyle: index === columns.length - 1
         ? column.headerStyle
         : { ...(typeof column.headerStyle === 'object' ? column.headerStyle : {}), ...dividerStyle },
     }));
-  }, [customColumns, employees, deleteLead]);
+  }, [customColumns, deleteLead, duplicateContacts, employees]);
 
   const columnVisibilityOptions = useMemo(
     () => columnDefs.map((column) => ({
@@ -334,6 +536,14 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     saveCustomColumnValues(customValuesStorageKey, customColumnValues);
   }, [customColumnValues, customValuesStorageKey]);
 
+  useEffect(() => {
+    window.localStorage.setItem(dateMarkerStorageKey, JSON.stringify(dateMarkerRows));
+  }, [dateMarkerRows, dateMarkerStorageKey]);
+
+  useEffect(() => {
+    window.localStorage.setItem(rowOrderStorageKey, JSON.stringify(manualRowOrder));
+  }, [manualRowOrder, rowOrderStorageKey]);
+
   const customColumnIdSet = useMemo(
     () => new Set(customColumns.map((column) => column.id)),
     [customColumns],
@@ -343,6 +553,23 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     const { data, colDef, newValue, oldValue, node } = event;
     const field = colDef.field;
     if (!field) return;
+    if ((data as DateMarkerRow).__rowType === 'date-marker') {
+      if (field !== 'notes' || typeof newValue !== 'string' || !newValue) return;
+
+      const { rawDate, markerDay } = formatMarkerDate(newValue);
+      setDateMarkerRows((prev) => prev.map((row) => (
+        row.id === data.id
+          ? {
+              ...row,
+              markerDate: rawDate,
+              markerDay,
+              notes: rawDate,
+            }
+          : row
+      )));
+      event.api.refreshCells({ rowNodes: [node] });
+      return;
+    }
 
     if (customColumnIdSet.has(field)) {
       const customValue = String(newValue ?? '');
@@ -393,6 +620,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
           email: nextDraft.email,
           business_owner: nextDraft.business_owner,
           business_name: nextDraft.business_name,
+          source: nextDraft.source,
           service: nextDraft.service,
           notes: nextDraft.notes,
           lead_value: nextDraft.lead_value,
@@ -424,6 +652,15 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       [field]: nextValue,
       ...(assignedEmployee ? { assigned_user: assignedEmployee.id } : {}),
     }));
+    setRowData((prev) => prev.map((row) => (
+      row.id === data.id
+        ? withNormalizedLead({
+            ...row,
+            [field]: nextValue,
+            ...(assignedEmployee ? { assigned_user: assignedEmployee.id } : {}),
+          })
+        : row
+    )));
     event.api.refreshCells({ rowNodes: [node] });
 
     try {
@@ -450,6 +687,9 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     if (params.node.rowPinned === 'bottom') {
       return { backgroundColor: 'rgba(255, 255, 255, 0.35)' };
     }
+    if ((params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker') {
+      return { backgroundColor: 'rgba(255, 255, 0, 1)' };
+    }
     if (params.data?.lead_status === 'paid') {
       return { backgroundColor: 'oklch(72.3% 0.219 149.579 / 0.1)' }; // green-500 with opacity
     }
@@ -462,9 +702,56 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       ...(customColumnValues[String(row.id)] ?? {}),
     }));
 
-    return filterLeadsByDate(rowsWithCustomValues, dateFilter);
-  }, [customColumnValues, dateFilter, rowData]);
+    const combinedRows = [
+      ...dateMarkerRows,
+      ...filterLeadsByDate(rowsWithCustomValues, dateFilter),
+    ];
+
+    if (manualRowOrder.length === 0) {
+      return combinedRows;
+    }
+
+    const orderLookup = new Map(manualRowOrder.map((id, index) => [id, index]));
+
+    return [...combinedRows].sort((left, right) => {
+      const leftIndex = orderLookup.get(String(left.id));
+      const rightIndex = orderLookup.get(String(right.id));
+
+      if (leftIndex == null && rightIndex == null) return 0;
+      if (leftIndex == null) return 1;
+      if (rightIndex == null) return -1;
+      return leftIndex - rightIndex;
+    });
+  }, [customColumnValues, dateFilter, dateMarkerRows, manualRowOrder, rowData]);
   const pinnedBottomRowData = useMemo(() => [draftRow], [draftRow]);
+
+  const handleAddDateClick = useCallback(() => {
+    const today = new Date();
+    const value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const { markerDay } = formatMarkerDate(value);
+    const markerRow: DateMarkerRow = {
+      id: `date-marker-${Date.now()}`,
+      contact: '',
+      email: '',
+      ns: '',
+      business_owner: '',
+      business_name: '',
+      source: '',
+      service: '',
+      notes: value,
+      lead_value: 0,
+      lead: '',
+      lead_status: 'pending',
+      payment_date: '',
+      payment_amount: 0,
+      markerDate: value,
+      markerDay,
+      __rowType: 'date-marker',
+    };
+
+    setDateMarkerRows((prev) => [markerRow, ...prev]);
+    setManualRowOrder((prev) => [String(markerRow.id), ...prev.filter((id) => id !== String(markerRow.id))]);
+  }, []);
 
   const handleAddCustomColumn = useCallback((label: string) => {
     const trimmedLabel = label.trim();
@@ -512,6 +799,18 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     });
   }, []);
 
+  const handleRowDragEnd = useCallback((event: RowDragEndEvent<GridLead>) => {
+    const orderedIds: string[] = [];
+
+    event.api.forEachNodeAfterFilterAndSort((node) => {
+      if (!node.rowPinned && node.data) {
+        orderedIds.push(String(node.data.id));
+      }
+    });
+
+    setManualRowOrder(orderedIds);
+  }, []);
+
   return (
     <div className="p-2 h-full flex flex-col space-y-2 animate-in fade-in duration-500">
       <ConfirmDialog
@@ -536,11 +835,19 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             <input
               type="text"
               placeholder="Search leads..."
-              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-xl text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-72 shadow-sm transition-all"
+              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-md text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-72 shadow-sm transition-all"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
             />
           </div>
+          <button
+            type="button"
+            onClick={handleAddDateClick}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 shadow-sm transition-all hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <CalendarPlus size={18} className="text-slate-500" />
+            <span>Add Date</span>
+          </button>
           <ColumnVisibilityMenu
             columns={columnVisibilityOptions}
             visibleColumnIds={visibleColumnIds}
@@ -570,6 +877,8 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             rowData={filteredRowData}
             pinnedBottomRowData={pinnedBottomRowData}
             columnDefs={visibleColumnDefs}
+            getRowId={(params) => String(params.data.id)}
+            rowDragManaged={true}
             undoRedoCellEditing={true}
             undoRedoCellEditingLimit={20}
             suppressCellFocus={false}
@@ -577,6 +886,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
               suppressMultiRanges: true,
             }}
             onCellValueChanged={onCellValueChanged}
+            onRowDragEnd={handleRowDragEnd}
             onColumnMoved={(event: ColumnMovedEvent) => {
               if (!event.finished) return;
 

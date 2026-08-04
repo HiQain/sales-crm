@@ -74,6 +74,7 @@ const createEmptyLead = (): GridLead => ({
   ns: '',
   business_owner: '',
   business_name: '',
+  source: '',
   service: '',
   notes: '',
   lead_value: 0,
@@ -171,6 +172,7 @@ export default function MyLeadsPage() {
       },
       { field: 'email', headerName: 'Email', minWidth: 120, editable: true },
       { field: 'business_name', headerName: 'Business Name', minWidth: 150, editable: true },
+      { field: 'source', headerName: 'Source', minWidth: 120, editable: true },
       { field: 'service', headerName: 'Service', minWidth: 120, editable: true, filter: true },
       {
         field: 'notes',
@@ -367,6 +369,7 @@ export default function MyLeadsPage() {
           email: nextDraft.email,
           business_owner: nextDraft.business_owner,
           business_name: nextDraft.business_name,
+          source: nextDraft.source,
           service: nextDraft.service,
           notes: nextDraft.notes,
           lead_value: nextDraft.lead_value,
@@ -508,7 +511,7 @@ export default function MyLeadsPage() {
             <input
               type="text"
               placeholder="Filter my leads..."
-              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-xl text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm"
+              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-md text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
             />

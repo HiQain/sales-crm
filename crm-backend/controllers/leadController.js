@@ -86,21 +86,22 @@ export const createLead = async (req, res) => {
   const payload = await attachAssignedUserFromLead(normalizedPayload);
 
   const {
-    contact, email, business_owner, business_name, service, notes,
+    contact, email, business_owner, business_name, source, service, notes,
     lead_value, lead, lead_status, assigned_user
   } = payload;
 
   try {
     const [result] = await db.execute(`
       INSERT INTO leads 
-      (contact, email, business_owner, business_name, service, notes,
+      (contact, email, business_owner, business_name, source, service, notes,
        lead_value, \`lead\`, lead_status, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       contact || '',
       email,
       business_owner,
       business_name,
+      source || '',
       service,
       notes,
       lead_value || 0,
