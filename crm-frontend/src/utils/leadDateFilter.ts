@@ -59,7 +59,7 @@ const resolveDateFilter = (date: Date, filter: LeadDateFilter, now: Date) => {
 };
 
 const parseLeadDate = (lead: Lead) => {
-  const candidate = lead.created_at || lead.payment_date || lead.follow_up;
+  const candidate = lead.created_at || lead.payment_date;
   if (!candidate) return null;
 
   const parsed = new Date(candidate);

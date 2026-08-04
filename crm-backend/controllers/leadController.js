@@ -56,24 +56,23 @@ export const createLead = async (req, res) => {
   }
 
   const {
-    contact, email, business_owner, business_name, service, response,
-    follow_up, lead_value, lead, lead_status, assigned_user
+    contact, email, business_owner, business_name, service, notes,
+    lead_value, lead, lead_status, assigned_user
   } = payload;
 
   try {
     const [result] = await db.execute(`
       INSERT INTO leads 
-      (contact, email, business_owner, business_name, service, response, follow_up, 
+      (contact, email, business_owner, business_name, service, notes,
        lead_value, \`lead\`, lead_status, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       contact || '',
       email,
       business_owner,
       business_name,
       service,
-      response,
-      follow_up,
+      notes,
       lead_value || 0,
       lead,
       lead_status || 'pending',

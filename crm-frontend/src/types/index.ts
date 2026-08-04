@@ -12,7 +12,7 @@ export interface User {
   role_type?: string;
 }
 
-export type LeadStatus = 'pending' | 'contacted' | 'paid' | 'failed';
+export type LeadStatus = string;
 
 export interface Lead {
   id: number;
@@ -22,8 +22,7 @@ export interface Lead {
   business_owner: string;
   business_name: string;
   service: string;
-  response: string;
-  follow_up: string;
+  notes: string;
   lead_value: number;
   lead: string;
   lead_status: LeadStatus;

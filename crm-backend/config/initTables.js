@@ -61,8 +61,7 @@ export const ensureTables = async () => {
       business_owner VARCHAR(255) NOT NULL DEFAULT '',
       business_name VARCHAR(255) NOT NULL DEFAULT '',
       service VARCHAR(255) NOT NULL DEFAULT '',
-      response TEXT NULL,
-      follow_up DATE NULL,
+      notes TEXT NULL,
       lead_value DECIMAL(10, 2) NOT NULL DEFAULT 0,
       \`lead\` VARCHAR(255) NULL,
       lead_status VARCHAR(100) NOT NULL DEFAULT 'pending',
@@ -72,7 +71,6 @@ export const ensureTables = async () => {
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       INDEX idx_leads_assigned_user (assigned_user),
       INDEX idx_leads_created_by (created_by),
-      INDEX idx_leads_follow_up (follow_up),
       INDEX idx_leads_status (lead_status)
     )
   `);
@@ -80,6 +78,78 @@ export const ensureTables = async () => {
   const [leadOwnerColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'lead_owner'`);
   if (leadOwnerColumn.length > 0) {
     await db.execute('ALTER TABLE leads CHANGE COLUMN lead_owner `lead` VARCHAR(255) NULL');
+  }
+
+  const [leadStatusColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'lead_status'`);
+  if (
+    leadStatusColumn.length > 0 &&
+    (
+      leadStatusColumn[0].Type.toLowerCase().startsWith('enum(') ||
+      leadStatusColumn[0].Null === 'YES' ||
+      leadStatusColumn[0].Default !== 'pending'
+    )
+  ) {
+    await db.execute(
+      "ALTER TABLE leads MODIFY COLUMN lead_status VARCHAR(100) NOT NULL DEFAULT 'pending'"
+    );
+  }
+
+  const [leadNotesColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'notes'`);
+  if (leadNotesColumn.length === 0) {
+    await db.execute('ALTER TABLE leads ADD COLUMN notes TEXT NULL AFTER service');
+  }
+
+  const [leadResponseColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'response'`);
+  const [leadFollowUpColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'follow_up'`);
+
+  if (leadResponseColumn.length > 0 || leadFollowUpColumn.length > 0) {
+    const selectFields = ['id', 'notes'];
+    if (leadResponseColumn.length > 0) {
+      selectFields.push('response');
+    }
+    if (leadFollowUpColumn.length > 0) {
+      selectFields.push('follow_up');
+    }
+
+    const [legacyLeadRows] = await db.execute(
+      `SELECT ${selectFields.map((field) => `\`${field}\``).join(', ')} FROM leads`
+    );
+
+    for (const row of legacyLeadRows) {
+      const mergedParts = [];
+      const existingNotes = typeof row.notes === 'string' ? row.notes.trim() : '';
+      if (existingNotes) {
+        mergedParts.push(existingNotes);
+      }
+
+      const legacyResponse = typeof row.response === 'string' ? row.response.trim() : '';
+      if (legacyResponse) {
+        mergedParts.push(legacyResponse);
+      }
+
+      if (row.follow_up) {
+        mergedParts.push(`Follow up: ${String(row.follow_up).slice(0, 10)}`);
+      }
+
+      const mergedNotes = mergedParts.join('\n\n');
+      await db.execute(
+        'UPDATE leads SET notes = ? WHERE id = ?',
+        [mergedNotes || null, row.id],
+      );
+    }
+
+    const [followUpIndex] = await db.execute(`SHOW INDEX FROM leads WHERE Key_name = 'idx_leads_follow_up'`);
+    if (followUpIndex.length > 0) {
+      await db.execute('ALTER TABLE leads DROP INDEX idx_leads_follow_up');
+    }
+
+    if (leadResponseColumn.length > 0) {
+      await db.execute('ALTER TABLE leads DROP COLUMN response');
+    }
+
+    if (leadFollowUpColumn.length > 0) {
+      await db.execute('ALTER TABLE leads DROP COLUMN follow_up');
+    }
   }
 
   const [legacyTables] = await db.execute(`SHOW TABLES LIKE 'sales_records'`);

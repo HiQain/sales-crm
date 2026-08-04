@@ -25,8 +25,7 @@ interface Lead {
   businessOwner: string;
   businessName: string;
   service: string;
-  response: string;
-  followUp: string;
+  notes: string;
   leadValue: number;
   leadOwner: string;
   status: string;
@@ -70,8 +69,8 @@ export default function SalesGrid() {
       console.error('Failed to fetch leads:', error);
       // Fallback mock data for demonstration
       setRowData([
-        { id: 1, contact: '923001234567', ns: 'L1', businessOwner: 'John Doe', businessName: 'Tech Solutions', service: 'SEO', response: 'Interested, call back next week.', followUp: '2024-06-15', leadValue: 1200, leadOwner: 'Sameer', status: 'pending' },
-        { id: 2, contact: '923456789012', ns: 'L2', businessOwner: 'Jane Smith', businessName: 'Cloud Systems', service: 'Design', response: 'Sent proposal.', followUp: '2024-06-12', leadValue: 3500, leadOwner: 'Sameer', status: 'paid' },
+        { id: 1, contact: '923001234567', ns: 'L1', businessOwner: 'John Doe', businessName: 'Tech Solutions', service: 'SEO', notes: 'Interested, call back next week.', leadValue: 1200, leadOwner: 'Sameer', status: 'pending' },
+        { id: 2, contact: '923456789012', ns: 'L2', businessOwner: 'Jane Smith', businessName: 'Cloud Systems', service: 'Design', notes: 'Sent proposal.', leadValue: 3500, leadOwner: 'Sameer', status: 'paid' },
       ]);
     } finally {
       setLoading(false);
@@ -89,19 +88,12 @@ export default function SalesGrid() {
     { field: 'businessName', headerName: 'Business Name', minWidth: 180, editable: true },
     { field: 'service', headerName: 'Service', minWidth: 120, editable: true, filter: true },
     { 
-      field: 'response', 
-      headerName: 'Response', 
+      field: 'notes', 
+      headerName: 'Notes', 
       minWidth: 250, 
       editable: true,
       cellEditor: 'agLargeTextCellEditor',
       cellEditorPopup: true
-    },
-    { 
-      field: 'followUp', 
-      headerName: 'Follow Up', 
-      width: 150, 
-      editable: true,
-      cellEditor: 'agDateCellEditor'
     },
     { 
       field: 'leadValue', 
@@ -127,10 +119,7 @@ export default function SalesGrid() {
       width: 120, 
       editable: true,
       cellRenderer: StatusBadge,
-      cellEditor: 'agSelectCellEditor',
-      cellEditorParams: {
-        values: ['pending', 'paid', 'contacted', 'failed']
-      }
+      cellEditor: 'agTextCellEditor',
     }
   ].map((column) => ({
     ...column,
@@ -145,8 +134,7 @@ export default function SalesGrid() {
       businessOwner: 'Unknown',
       businessName: 'Unassigned',
       service: 'General',
-      response: '',
-      followUp: new Date().toISOString().split('T')[0],
+      notes: '',
       leadValue: 0,
       leadOwner: 'Admin',
       status: 'pending',

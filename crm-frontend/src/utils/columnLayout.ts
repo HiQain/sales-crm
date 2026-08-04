@@ -62,5 +62,5 @@ export function mergeVisibleIds(orderedIds: string[], storedVisible: string[] | 
   if (!storedVisible?.length) return orderedIds;
 
   const visibleSet = new Set(storedVisible.filter((id) => orderedIds.includes(id)));
-  return orderedIds.filter((id) => visibleSet.has(id));
+  return orderedIds.filter((id) => visibleSet.has(id) || !storedVisible.includes(id));
 }

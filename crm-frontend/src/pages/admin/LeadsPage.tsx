@@ -30,7 +30,6 @@ import {
   type CustomColumnDefinition,
   type CustomColumnValues,
 } from '../../utils/customColumns';
-import { formatDateDisplay } from '../../utils/date';
 import { handleGridCellCopy } from '../../utils/gridClipboard';
 import { normalizeUsPhoneForStorage } from '../../utils/phone';
 import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../../utils/columnLayout';
@@ -78,8 +77,7 @@ const createEmptyLead = (): GridLead => ({
   business_owner: '',
   business_name: '',
   service: '',
-  response: '',
-  follow_up: '',
+  notes: '',
   lead_value: 0,
   lead: '',
   lead_status: 'pending',
@@ -187,23 +185,13 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       { field: 'business_name', headerName: 'Business Name', minWidth: 118, editable: true },
       { field: 'service', headerName: 'Service', minWidth: 92, editable: true, filter: true },
       {
-        field: 'response',
-        headerName: 'Response',
-        minWidth: 112,
-        editable: true,
-        cellEditor: 'agLargeTextCellEditor',
-        cellEditorPopup: true,
-        cellClass: 'italic text-slate-500'
-      },
-      {
-        field: 'follow_up',
-        headerName: 'Follow Up',
-        minWidth: 104,
+        field: 'notes',
+        headerName: 'Notes',
+        minWidth: 180,
         editable: true,
         cellEditor: 'agLargeTextCellEditor',
         cellEditorPopup: true,
         cellClass: 'italic text-slate-500',
-        valueFormatter: (params) => formatDateDisplay(params.value) || params.value || '',
       },
       {
         field: 'lead_value',
@@ -230,8 +218,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         minWidth: 104,
         editable: true,
         cellRenderer: StatusBadge,
-        cellEditor: 'agSelectCellEditor',
-        cellEditorParams: { values: ['pending', 'contacted', 'paid', 'failed'] }
+        cellEditor: 'agTextCellEditor',
       },
       ...customColumns.map<ColDef<GridLead>>((column) => ({
         colId: column.id,
@@ -400,8 +387,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
           business_owner: nextDraft.business_owner,
           business_name: nextDraft.business_name,
           service: nextDraft.service,
-          response: nextDraft.response,
-          follow_up: nextDraft.follow_up,
+          notes: nextDraft.notes,
           lead_value: nextDraft.lead_value,
           lead: nextDraft.lead,
           lead_status: nextDraft.lead_status || 'pending',

@@ -197,8 +197,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
         headerName: 'Status',
         minWidth: 104,
         editable: true,
-        cellEditor: 'agSelectCellEditor',
-        cellEditorParams: { values: ['pending', 'contacted', 'paid', 'failed'] },
+        cellEditor: 'agTextCellEditor',
       },
       {
         field: 'paid',
