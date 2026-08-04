@@ -214,6 +214,8 @@ export default function SalesGrid() {
             theme={myTheme}
             rowData={rowData}
             columnDefs={columnDefs}
+            undoRedoCellEditing={true}
+            undoRedoCellEditingLimit={20}
             suppressCellFocus={false}
             cellSelection={{
               suppressMultiRanges: true,

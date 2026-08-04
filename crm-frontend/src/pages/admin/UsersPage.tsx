@@ -82,7 +82,7 @@ export default function UsersPage() {
               onClick={() => navigate(`/admin/users/${user.id}/leads`)}
               className="bg-white/40 backdrop-blur-[20px] border border-white/30 p-5 rounded-2xl flex items-center gap-6 cursor-pointer hover:bg-white/50 hover:border-white/40 shadow-sm transition-all group relative overflow-hidden"
             >
-              <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="absolute inset-0 bg-slate-100/40 opacity-0 group-hover:opacity-100 transition-opacity" />
               <div className="w-16 h-16 rounded-2xl bg-indigo-600/10 text-indigo-600 flex items-center justify-center border border-indigo-500/20 shadow-inner group-hover:scale-105 transition-transform relative z-10">
                 <UserIcon size={32} />
               </div>

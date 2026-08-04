@@ -17,7 +17,7 @@ import {
 import { AllEnterpriseModule } from 'ag-grid-enterprise';
 import apiClient from '../../api/client';
 import { Loader2, Search, Trash2 } from 'lucide-react';
-import { Lead } from '../../types';
+import { Lead, User } from '../../types';
 import ColumnVisibilityMenu, { getColumnVisibilityId } from '../../components/ColumnVisibilityMenu';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LeadDateFilter from '../../components/LeadDateFilter';
@@ -37,6 +37,7 @@ import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } 
 ModuleRegistry.registerModules([AllEnterpriseModule]);
 
 type GridLead = Lead & { __isDraft?: boolean; [key: string]: unknown };
+type EmployeeOption = Pick<User, 'id' | 'username'>;
 
 const glassTheme = themeQuartz.withParams({
   backgroundColor: 'rgba(255, 255, 255)',
@@ -106,7 +107,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [dateFilter, setDateFilter] = useState<LeadDateFilterValue>('all');
-  const [employees, setEmployees] = useState<string[]>([]);
+  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [draftRow, setDraftRow] = useState<GridLead>(createEmptyLead);
   const [leadPendingDelete, setLeadPendingDelete] = useState<number | string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -120,7 +121,10 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const fetchUsers = useCallback(async () => {
     try {
       const response = await apiClient.get('/users');
-      setEmployees(response.data.map((u: any) => u.username));
+      setEmployees(response.data.map((u: any) => ({
+        id: Number(u.id),
+        username: String(u.username ?? ''),
+      })));
     } catch (error) {
       console.error('Failed to fetch employees:', error);
     }
@@ -210,7 +214,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         editable: true,
         filter: true,
         cellEditor: 'agSelectCellEditor',
-        cellEditorParams: { values: employees }
+        cellEditorParams: { values: employees.map((employee) => employee.username) }
       },
       {
         field: 'lead_status',
@@ -368,6 +372,9 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     }
 
     const nextValue = field === 'contact' ? (normalizedValue ?? oldValue ?? '') : newValue;
+    const assignedEmployee = field === 'lead'
+      ? employees.find((employee) => employee.username === String(nextValue ?? '').trim())
+      : undefined;
 
     const hasValue = !(nextValue == null || (typeof nextValue === 'string' && nextValue.trim() === ''));
     if (node.rowPinned === 'bottom') {
@@ -412,19 +419,32 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       return;
     }
 
-    setRowData(prev => prev.map(row => (
-      row.id === data.id ? withNormalizedLead({ ...row, [field]: nextValue }) : row
-    )));
+    Object.assign(data, withNormalizedLead({
+      ...data,
+      [field]: nextValue,
+      ...(assignedEmployee ? { assigned_user: assignedEmployee.id } : {}),
+    }));
+    event.api.refreshCells({ rowNodes: [node] });
 
     try {
-      await apiClient.put(`/leads/${data.id}`, {
-        [field]: nextValue,
-      });
+      const payload = field === 'lead'
+        ? {
+            lead: nextValue,
+            assigned_user: assignedEmployee?.id ?? null,
+          }
+        : {
+            [field]: nextValue,
+          };
+
+      await apiClient.put(`/leads/${data.id}`, payload);
+      if (field === 'lead') {
+        fetchData();
+      }
     } catch (error) {
       console.error('Update failed:', error);
       fetchData();
     }
-  }, [customColumnIdSet, customColumns, draftRow, fetchData, userId]);
+  }, [customColumnIdSet, customColumns, draftRow, employees, fetchData, userId]);
 
   const getRowStyle = (params: RowClassParams<GridLead>) => {
     if (params.node.rowPinned === 'bottom') {
@@ -512,11 +532,11 @@ export default function LeadsPage({ userId }: { userId?: string }) {
 
         <div className="flex items-center gap-3">
           <div className="relative group">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-blue-400 transition-colors" size={18} />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-600 transition-colors" size={18} />
             <input
               type="text"
               placeholder="Search leads..."
-              className="bg-white/30 backdrop-blur-[12px] border border-white/20 pl-10 pr-4 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-72 shadow-sm transition-all"
+              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-xl text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-72 shadow-sm transition-all"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
             />
@@ -550,6 +570,8 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             rowData={filteredRowData}
             pinnedBottomRowData={pinnedBottomRowData}
             columnDefs={visibleColumnDefs}
+            undoRedoCellEditing={true}
+            undoRedoCellEditingLimit={20}
             suppressCellFocus={false}
             cellSelection={{
               suppressMultiRanges: true,

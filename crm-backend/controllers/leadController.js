@@ -26,6 +26,34 @@ const normalizeLeadPayload = (payload) => {
   return normalized;
 };
 
+const attachAssignedUserFromLead = async (payload) => {
+  const normalized = { ...payload };
+
+  if (!('lead' in normalized)) {
+    return normalized;
+  }
+
+  const username = String(normalized.lead ?? '').trim();
+
+  if (!username) {
+    if (!('assigned_user' in normalized)) {
+      normalized.assigned_user = null;
+    }
+    return normalized;
+  }
+
+  const [users] = await db.execute(
+    'SELECT id FROM users WHERE username = ? LIMIT 1',
+    [username],
+  );
+
+  if (users.length > 0) {
+    normalized.assigned_user = users[0].id;
+  }
+
+  return normalized;
+};
+
 export const getLeads = async (req, res) => {
   const { userId } = req.query;
 
@@ -49,11 +77,13 @@ export const getLeads = async (req, res) => {
 };
 
 export const createLead = async (req, res) => {
-  const payload = normalizeLeadPayload(req.body);
+  const normalizedPayload = normalizeLeadPayload(req.body);
 
-  if (!payload) {
+  if (!normalizedPayload) {
     return res.status(400).json({ error: { message: 'Contact must be a valid US phone number in the format (240) 319-4630' } });
   }
+
+  const payload = await attachAssignedUserFromLead(normalizedPayload);
 
   const {
     contact, email, business_owner, business_name, service, notes,
@@ -88,11 +118,13 @@ export const createLead = async (req, res) => {
 
 export const updateLead = async (req, res) => {
   const { id } = req.params;
-  const updates = normalizeLeadPayload(req.body);
+  const normalizedUpdates = normalizeLeadPayload(req.body);
 
-  if (!updates) {
+  if (!normalizedUpdates) {
     return res.status(400).json({ error: { message: 'Contact must be a valid US phone number in the format (240) 319-4630' } });
   }
+
+  const updates = await attachAssignedUserFromLead(normalizedUpdates);
 
   if (Object.keys(updates).length === 0) {
     return res.status(400).json({ error: { message: 'No fields to update' } });

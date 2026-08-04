@@ -393,9 +393,8 @@ export default function MyLeadsPage() {
       return;
     }
 
-    setRowData(prev => prev.map(row => (
-      row.id === data.id ? withNormalizedLead({ ...row, [field]: nextValue }) : row
-    )));
+    Object.assign(data, withNormalizedLead({ ...data, [field]: nextValue }));
+    event.api.refreshCells({ rowNodes: [node] });
 
     try {
       await apiClient.put(`/leads/${data.id}`, {
@@ -505,11 +504,11 @@ export default function MyLeadsPage() {
           />
           <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
           <div className="relative group">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-500" size={18} />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-600" size={18} />
             <input
               type="text"
               placeholder="Filter my leads..."
-              className="bg-white/30 backdrop-blur-[12px] border border-white/20 pl-10 pr-4 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm"
+              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-xl text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
             />
@@ -528,6 +527,8 @@ export default function MyLeadsPage() {
           rowData={filteredRowData}
           pinnedBottomRowData={pinnedBottomRowData}
           columnDefs={visibleColumnDefs}
+          undoRedoCellEditing={true}
+          undoRedoCellEditingLimit={20}
           suppressCellFocus={false}
           cellSelection={{
             suppressMultiRanges: true,

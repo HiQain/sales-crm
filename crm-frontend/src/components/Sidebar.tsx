@@ -54,7 +54,7 @@ export default function Sidebar({ role }: SidebarProps) {
       <div className="p-6 flex items-center justify-between">
         <div className={`flex items-center gap-2 overflow-hidden ${isCollapsed ? 'opacity-0 w-0' : 'opacity-100'}`}>
           <LayoutDashboard className="text-indigo-600 flex-shrink-0" />
-          <span className="font-bold bg-gradient-to-r from-indigo-700 to-blue-400 bg-clip-text text-transparent whitespace-nowrap">
+          <span className="font-bold text-slate-800 whitespace-nowrap">
             <span className="hiqain-anim text-indigo-600 mr-1">HIQAIN</span> CRM
           </span>
         </div>

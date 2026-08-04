@@ -318,9 +318,8 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
     }
 
     const nextBilling = withDerivedBillingValues({ ...data, [field]: newValue });
-    setRowData((prev) => prev.map((row) => (
-      row.id === data.id ? nextBilling : row
-    )));
+    Object.assign(data, nextBilling);
+    event.api.refreshCells({ rowNodes: [node] });
 
     try {
       await apiClient.put(`/billings/${data.id}`, {
@@ -391,11 +390,11 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
           />
           <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
           <div className="relative group">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-500 transition-colors" size={18} />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-600 transition-colors" size={18} />
             <input
               type="text"
               placeholder="Search billings..."
-              className="bg-white/30 backdrop-blur-[12px] border border-white/20 pl-10 pr-4 py-2 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm transition-all"
+              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-xl text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm transition-all"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
             />
@@ -411,7 +410,7 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
           { label: 'Net Currency', val: `$${stats.netAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: BadgeDollarSign, color: 'text-emerald-700' },
         ].map((stat) => (
           <div key={stat.label} className="bg-white/40 backdrop-blur-[20px] border border-white/30 p-4 rounded-2xl flex items-center gap-4 shadow-sm relative overflow-hidden group">
-            <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="absolute inset-0 bg-slate-100/40 opacity-0 group-hover:opacity-100 transition-opacity" />
             <div className={`p-2 rounded-xl bg-white/40 border border-white/50 ${stat.color} relative z-10`}>
               <stat.icon size={24} />
             </div>
@@ -434,6 +433,8 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
           rowData={filteredRowData}
           pinnedBottomRowData={pinnedBottomRowData}
           columnDefs={visibleColumnDefs}
+          undoRedoCellEditing={true}
+          undoRedoCellEditingLimit={20}
           suppressCellFocus={false}
           cellSelection={{
             suppressMultiRanges: true,
