@@ -8,6 +8,10 @@ export interface User {
   blocked: boolean;
   createdAt: string;
   updatedAt: string;
+  created_at?: string;
+  updated_at?: string;
+  visible_to_employees?: boolean;
+  visible_employee_count?: number;
   role_name?: string;
   role_type?: string;
 }
@@ -24,6 +28,8 @@ export interface Lead {
   source: string;
   service: string;
   notes: string;
+  is_date_marker?: boolean;
+  marker_date?: string;
   lead_value: number;
   lead: string;
   lead_status: LeadStatus;

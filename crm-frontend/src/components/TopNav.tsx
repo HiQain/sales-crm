@@ -20,7 +20,7 @@ export default function TopNav({ role }: TopNavProps) {
       { name: role === 'admin' ? 'Leads' : 'My Leads', path: `${basePath}/leads`, icon: Target },
       { name: role === 'admin' ? 'Client Journey' : 'My Clients', path: `${basePath}/client-journeys`, icon: Route },
       { name: role === 'admin' ? 'Billings' : 'My Billings', path: `${basePath}/billings`, icon: CreditCard },
-      ...(role === 'admin' ? [{ name: 'Users', path: '/admin/users', icon: Users }] : []),
+      { name: 'Users', path: `${basePath}/users`, icon: Users },
     ],
     [basePath, role],
   );

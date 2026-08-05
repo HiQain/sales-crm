@@ -24,3 +24,31 @@ export const formatDateDisplay = (value: unknown) => {
   const parsed = toDisplayDate(value);
   return parsed ? format(parsed, 'dd-MMMM-yy') : '';
 };
+
+export const formatDateTimeDisplay = (value: unknown) => {
+  const parsed = toDisplayDate(value);
+  return parsed ? format(parsed, 'dd-MMMM-yy h:mm a') : '';
+};
+
+export const formatRowTimestampTooltip = (row: {
+  created_at?: string;
+  updated_at?: string;
+  __isDraft?: boolean;
+  is_date_marker?: boolean;
+} | null | undefined) => {
+  if (!row || row.__isDraft || row.is_date_marker) {
+    return '';
+  }
+
+  const createdAt = formatDateTimeDisplay(row.created_at);
+  const updatedAt = formatDateTimeDisplay(row.updated_at);
+
+  if (!createdAt && !updatedAt) {
+    return '';
+  }
+
+  return [
+    `Created: ${createdAt || '-'}`,
+    `Updated: ${updatedAt || '-'}`,
+  ].join('\n');
+};

@@ -23,6 +23,7 @@ import ColumnVisibilityMenu, { getColumnVisibilityId } from '../../components/Co
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LeadDateFilter from '../../components/LeadDateFilter';
 import { filterLeadsByDate, type LeadDateFilter as LeadDateFilterValue } from '../../utils/leadDateFilter';
+import { formatRowTimestampTooltip } from '../../utils/date';
 import {
   createCustomColumnId,
   loadCustomColumnValues,
@@ -40,7 +41,6 @@ ModuleRegistry.registerModules([AllEnterpriseModule]);
 type GridLead = Lead & { __isDraft?: boolean; [key: string]: unknown };
 type EmployeeOption = Pick<User, 'id' | 'username'>;
 type DateMarkerRow = GridLead & {
-  __rowType: 'date-marker';
   markerDate: string;
   markerDay: string;
 };
@@ -59,7 +59,7 @@ const glassTheme = themeQuartz.withParams({
 });
 
 const StatusBadge = (params: ICellRendererParams) => {
-  if ((params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker') {
+  if ((params.data as DateMarkerRow | undefined)?.is_date_marker) {
     return null;
   }
 
@@ -153,37 +153,6 @@ const withNormalizedLead = (lead: GridLead): GridLead => ({
   contact: normalizeUsPhoneForStorage(lead.contact) ?? lead.contact,
 });
 
-const loadDateMarkers = (storageKey: string): DateMarkerRow[] => {
-  if (typeof window === 'undefined') return [];
-
-  try {
-    const stored = window.localStorage.getItem(storageKey);
-    if (!stored) return [];
-
-    const parsed = JSON.parse(stored);
-    return Array.isArray(parsed)
-      ? parsed.map((row) => {
-          const markerDate = typeof row?.markerDate === 'string'
-            ? row.markerDate
-            : typeof row?.notes === 'string'
-              ? row.notes
-              : '';
-
-          const formatted = formatMarkerDate(markerDate);
-
-          return {
-            ...row,
-            markerDate: formatted.rawDate,
-            markerDay: formatted.markerDay,
-            notes: formatted.rawDate || '',
-          };
-        })
-      : [];
-  } catch {
-    return [];
-  }
-};
-
 const loadStoredRowOrder = (storageKey: string): string[] => {
   if (typeof window === 'undefined') return [];
 
@@ -231,14 +200,12 @@ const formatMarkerDate = (dateValue: string) => {
 export default function LeadsPage({ userId }: { userId?: string }) {
   const layoutStorageKey = userId ? `crm:admin-user-leads:${userId}` : 'crm:admin-leads';
   const customValuesStorageKey = `${layoutStorageKey}:custom-values`;
-  const dateMarkerStorageKey = `${layoutStorageKey}:date-markers`;
   const rowOrderStorageKey = `${layoutStorageKey}:row-order`;
   const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [dateFilter, setDateFilter] = useState<LeadDateFilterValue>('all');
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
-  const [dateMarkerRows, setDateMarkerRows] = useState<DateMarkerRow[]>(() => loadDateMarkers(dateMarkerStorageKey));
   const [manualRowOrder, setManualRowOrder] = useState<string[]>(() => loadStoredRowOrder(rowOrderStorageKey));
   const [draftRow, setDraftRow] = useState<GridLead>(createEmptyLead);
   const [leadPendingDelete, setLeadPendingDelete] = useState<number | string | null>(null);
@@ -271,7 +238,21 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       }
       const response = await apiClient.get(url);
       const leads = (Array.isArray(response.data) ? response.data : response.data.data || []) as GridLead[];
-      setRowData(leads.map(withNormalizedLead));
+      setRowData(leads.map((lead) => {
+        const normalizedLead = withNormalizedLead(lead);
+        const markerDate = normalizedLead.marker_date || normalizedLead.notes || '';
+        const formatted = normalizedLead.is_date_marker ? formatMarkerDate(markerDate) : null;
+
+        return formatted
+          ? {
+              ...normalizedLead,
+              marker_date: formatted.rawDate,
+              markerDate: formatted.rawDate,
+              markerDay: formatted.markerDay,
+              notes: formatted.rawDate || '',
+            }
+          : normalizedLead;
+      }));
     } catch (error) {
       console.error('Failed to fetch leads:', error);
     } finally {
@@ -297,13 +278,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const deleteLead = useCallback(async () => {
     if (leadPendingDelete == null) return;
     setDeleteLoading(true);
-
-    if (typeof leadPendingDelete === 'string' && leadPendingDelete.startsWith('date-marker-')) {
-      setDateMarkerRows((prev) => prev.filter((row) => row.id !== leadPendingDelete));
-      setLeadPendingDelete(null);
-      setDeleteLoading(false);
-      return;
-    }
 
     try {
       await apiClient.delete(`/leads/${leadPendingDelete}`);
@@ -361,18 +335,18 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         field: 'notes',
         headerName: 'Notes',
         minWidth: 180,
-        editable: (params) => (params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker' || true,
+        editable: true,
         cellEditor: 'agLargeTextCellEditor',
         cellEditorPopup: true,
         cellEditorSelector: (params) => (
-          (params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker'
+          (params.data as DateMarkerRow | undefined)?.is_date_marker
             ? { component: 'agDateStringCellEditor' }
             : undefined
         ),
         valueFormatter: (params) => {
           const markerRow = params.data as DateMarkerRow | undefined;
 
-          if (markerRow?.__rowType === 'date-marker' && markerRow.markerDate) {
+          if (markerRow?.is_date_marker && markerRow.markerDate) {
             const { markerLabel, markerDay } = formatMarkerDate(markerRow.markerDate);
             return markerDay ? `${markerDay}, ${markerLabel}` : markerLabel;
           }
@@ -380,7 +354,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
           return params.value;
         },
         cellStyle: (params) => (
-          (params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker'
+          (params.data as DateMarkerRow | undefined)?.is_date_marker
             ? {
                 textAlign: 'center',
                 fontWeight: 700,
@@ -389,7 +363,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             : undefined
         ),
         cellClass: (params) => (
-          (params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker'
+          (params.data as DateMarkerRow | undefined)?.is_date_marker
             ? 'text-center font-bold text-amber-900'
             : 'italic text-slate-500'
         ),
@@ -401,7 +375,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         editable: true,
         valueParser: numberParser,
         valueFormatter: (params) => (
-          (params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker'
+          (params.data as DateMarkerRow | undefined)?.is_date_marker
             ? ''
             : currencyFormatter(params)
         ),
@@ -544,10 +518,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   }, [customColumnValues, customValuesStorageKey]);
 
   useEffect(() => {
-    window.localStorage.setItem(dateMarkerStorageKey, JSON.stringify(dateMarkerRows));
-  }, [dateMarkerRows, dateMarkerStorageKey]);
-
-  useEffect(() => {
     window.localStorage.setItem(rowOrderStorageKey, JSON.stringify(manualRowOrder));
   }, [manualRowOrder, rowOrderStorageKey]);
 
@@ -560,21 +530,30 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     const { data, colDef, newValue, oldValue, node } = event;
     const field = colDef.field;
     if (!field) return;
-    if ((data as DateMarkerRow).__rowType === 'date-marker') {
+    if ((data as DateMarkerRow).is_date_marker) {
       if (field !== 'notes' || typeof newValue !== 'string' || !newValue) return;
 
       const { rawDate, markerDay } = formatMarkerDate(newValue);
-      setDateMarkerRows((prev) => prev.map((row) => (
-        row.id === data.id
-          ? {
-              ...row,
-              markerDate: rawDate,
-              markerDay,
-              notes: rawDate,
-            }
-          : row
+      const nextMarker = {
+        ...data,
+        marker_date: rawDate,
+        markerDate: rawDate,
+        markerDay,
+        notes: rawDate,
+      };
+      Object.assign(data, nextMarker);
+      setRowData((prev) => prev.map((row) => (
+        row.id === data.id ? nextMarker : row
       )));
       event.api.refreshCells({ rowNodes: [node] });
+
+      void apiClient.put(`/leads/${data.id}`, {
+        marker_date: rawDate,
+        notes: rawDate,
+      }).catch((error) => {
+        console.error('Date marker update failed:', error);
+        fetchData();
+      });
       return;
     }
 
@@ -648,7 +627,9 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         }
         if (createdLeadId != null) {
           const nextLeadId = String(createdLeadId);
-          const dateMarkerIds = dateMarkerRows.map((row) => String(row.id));
+          const dateMarkerIds = rowData
+            .filter((row) => row.is_date_marker)
+            .map((row) => String(row.id));
 
           setManualRowOrder((prev) => {
             const fallbackOrder = [
@@ -710,7 +691,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     if (params.node.rowPinned === 'bottom') {
       return { backgroundColor: 'rgba(255, 255, 255, 0.35)' };
     }
-    if ((params.data as DateMarkerRow | undefined)?.__rowType === 'date-marker') {
+    if ((params.data as DateMarkerRow | undefined)?.is_date_marker) {
       return { backgroundColor: 'rgba(255, 255, 0, 1)' };
     }
     if (params.data?.lead_status === 'paid') {
@@ -724,10 +705,12 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       ...row,
       ...(customColumnValues[String(row.id)] ?? {}),
     }));
+    const dateMarkerRows = rowsWithCustomValues.filter((row) => row.is_date_marker) as DateMarkerRow[];
+    const standardRows = rowsWithCustomValues.filter((row) => !row.is_date_marker);
 
     const combinedRows = [
       ...dateMarkerRows,
-      ...filterLeadsByDate(rowsWithCustomValues, dateFilter),
+      ...filterLeadsByDate(standardRows, dateFilter),
     ];
 
     if (manualRowOrder.length === 0) {
@@ -745,36 +728,43 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       if (rightIndex == null) return -1;
       return leftIndex - rightIndex;
     });
-  }, [customColumnValues, dateFilter, dateMarkerRows, manualRowOrder, rowData]);
+  }, [customColumnValues, dateFilter, manualRowOrder, rowData]);
   const pinnedBottomRowData = useMemo(() => [draftRow], [draftRow]);
 
   const handleAddDateClick = useCallback(() => {
     const today = new Date();
     const value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     const { markerDay } = formatMarkerDate(value);
-    const markerRow: DateMarkerRow = {
-      id: `date-marker-${Date.now()}`,
+    void apiClient.post('/leads', {
       contact: '',
       email: '',
-      ns: '',
       business_owner: '',
       business_name: '',
       source: '',
       service: '',
       notes: value,
+      marker_date: value,
+      is_date_marker: true,
       lead_value: 0,
       lead: '',
       lead_status: 'pending',
-      payment_date: '',
-      payment_amount: 0,
-      markerDate: value,
-      markerDay,
-      __rowType: 'date-marker',
-    };
+      assigned_user: userId ? Number(userId) : null,
+    }).then((response) => {
+      const createdMarker = response.data as GridLead;
+      const markerRow: DateMarkerRow = {
+        ...withNormalizedLead(createdMarker),
+        marker_date: value,
+        markerDate: value,
+        markerDay,
+        notes: value,
+      };
 
-    setDateMarkerRows((prev) => [markerRow, ...prev]);
-    setManualRowOrder((prev) => [String(markerRow.id), ...prev.filter((id) => id !== String(markerRow.id))]);
-  }, []);
+      setRowData((prev) => [markerRow, ...prev]);
+      setManualRowOrder((prev) => [String(markerRow.id), ...prev.filter((id) => id !== String(markerRow.id))]);
+    }).catch((error) => {
+      console.error('Create date marker failed:', error);
+    });
+  }, [userId]);
 
   const handleAddCustomColumn = useCallback((label: string) => {
     const trimmedLabel = label.trim();
@@ -936,19 +926,21 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             onCellKeyDown={(event) => {
               void handleGridCellCopy(event);
             }}
-            getRowStyle={getRowStyle}
-            quickFilterText={searchText}
-            defaultColDef={{
-              sortable: false,
-              filter: false,
-              resizable: true,
-              suppressHeaderMenuButton: true,
-              cellStyle: { textAlign: 'left', paddingLeft: '6px', paddingRight: '6px' },
-            }}
-            rowHeight={28}
-            headerHeight={34}
-            animateRows={true}
-          />
+          getRowStyle={getRowStyle}
+          quickFilterText={searchText}
+          enableBrowserTooltips={true}
+          defaultColDef={{
+            sortable: false,
+            filter: false,
+            resizable: true,
+            suppressHeaderMenuButton: true,
+            cellStyle: { textAlign: 'left', paddingLeft: '6px', paddingRight: '6px' },
+            tooltipValueGetter: (params) => formatRowTimestampTooltip(params.data),
+          }}
+          rowHeight={28}
+          headerHeight={34}
+          animateRows={true}
+        />
         </div>
       </div>
     </div>

@@ -16,6 +16,8 @@ import UserLeadsPage from './pages/admin/UserLeadsPage';
 import MyLeadsPage from './pages/employee/MyLeadsPage';
 import MySalesRecordsPage from './pages/employee/MySalesRecordsPage';
 import MyBillingsPage from './pages/employee/MyBillingsPage';
+import EmployeeUsersPage from './pages/employee/UsersPage';
+import EmployeeUserLeadsPage from './pages/employee/UserLeadsPage';
 
 export default function App() {
   return (
@@ -44,6 +46,8 @@ export default function App() {
               <Route path="leads" element={<MyLeadsPage />} />
               <Route path="client-journeys" element={<MySalesRecordsPage />} />
               <Route path="billings" element={<MyBillingsPage />} />
+              <Route path="users" element={<EmployeeUsersPage />} />
+              <Route path="users/:id/leads" element={<EmployeeUserLeadsPage />} />
             </Route>
           </Route>
 

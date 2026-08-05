@@ -30,7 +30,7 @@ import ColumnVisibilityMenu, { getColumnVisibilityId } from './ColumnVisibilityM
 import ConfirmDialog from './ConfirmDialog';
 import LeadDateFilter from './LeadDateFilter';
 import { filterItemsByDate, type LeadDateFilter as DateFilterValue } from '../utils/leadDateFilter';
-import { formatDateDisplay } from '../utils/date';
+import { formatDateDisplay, formatRowTimestampTooltip } from '../utils/date';
 import { handleGridCellCopy } from '../utils/gridClipboard';
 import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../utils/columnLayout';
 
@@ -468,12 +468,14 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
           }}
           getRowStyle={getRowStyle}
           quickFilterText={searchText}
+          enableBrowserTooltips={true}
           defaultColDef={{
             sortable: false,
             filter: false,
             resizable: true,
             suppressHeaderMenuButton: true,
             cellStyle: { textAlign: 'left', paddingLeft: '6px', paddingRight: '6px' },
+            tooltipValueGetter: (params) => formatRowTimestampTooltip(params.data),
           }}
           rowHeight={28}
           headerHeight={34}

@@ -7,6 +7,7 @@ const serializeLead = (lead) => {
   return {
     ...lead,
     contact: normalizedContact ?? lead.contact,
+    is_date_marker: Boolean(lead.is_date_marker),
   };
 };
 
@@ -58,6 +59,17 @@ export const getLeads = async (req, res) => {
   const { userId } = req.query;
 
   try {
+    if (req.user?.role !== 'admin' && userId && Number(userId) !== Number(req.user.id)) {
+      const [allowedUsers] = await db.execute(
+        'SELECT 1 FROM user_employee_visibility WHERE user_id = ? AND employee_id = ? LIMIT 1',
+        [userId, req.user.id],
+      );
+
+      if (allowedUsers.length === 0) {
+        return res.status(403).json({ error: { message: 'You are not allowed to view these leads' } });
+      }
+    }
+
     let query = `SELECT * FROM leads WHERE 1=1`;
     const params = [];
 
@@ -87,30 +99,33 @@ export const createLead = async (req, res) => {
 
   const {
     contact, email, business_owner, business_name, source, service, notes,
-    lead_value, lead, lead_status, assigned_user
+    is_date_marker, marker_date, lead_value, lead, lead_status, assigned_user
   } = payload;
 
   try {
     const [result] = await db.execute(`
       INSERT INTO leads 
       (contact, email, business_owner, business_name, source, service, notes,
-       lead_value, \`lead\`, lead_status, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       is_date_marker, marker_date, lead_value, \`lead\`, lead_status, assigned_user, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       contact || '',
-      email,
-      business_owner,
-      business_name,
+      email || '',
+      business_owner || '',
+      business_name || '',
       source || '',
-      service,
+      service || '',
       notes,
+      is_date_marker ? 1 : 0,
+      marker_date || null,
       lead_value || 0,
-      lead,
+      lead || null,
       lead_status || 'pending',
-      assigned_user || req.user.id,
+      Object.prototype.hasOwnProperty.call(payload, 'assigned_user') ? assigned_user ?? null : req.user.id,
       req.user.id
     ]);
-    res.status(201).json(serializeLead({ id: result.insertId, ...payload }));
+    const [rows] = await db.execute('SELECT * FROM leads WHERE id = ? LIMIT 1', [result.insertId]);
+    res.status(201).json(serializeLead(rows[0] ?? { id: result.insertId, ...payload }));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to create lead' } });

@@ -21,6 +21,7 @@ import { Lead } from '../../types';
 import ColumnVisibilityMenu, { getColumnVisibilityId } from '../../components/ColumnVisibilityMenu';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LeadDateFilter from '../../components/LeadDateFilter';
+import { formatRowTimestampTooltip } from '../../utils/date';
 import { filterLeadsByDate, type LeadDateFilter as LeadDateFilterValue } from '../../utils/leadDateFilter';
 import {
   createCustomColumnId,
@@ -98,8 +99,18 @@ const withNormalizedLead = (lead: GridLead): GridLead => ({
   contact: normalizeUsPhoneForStorage(lead.contact) ?? lead.contact,
 });
 
-export default function MyLeadsPage() {
-  const layoutStorageKey = 'crm:employee-leads';
+interface MyLeadsPageProps {
+  userIdOverride?: string;
+  title?: string;
+  searchPlaceholder?: string;
+}
+
+export default function MyLeadsPage({
+  userIdOverride,
+  title = 'My Leads',
+  searchPlaceholder = 'Filter my leads...',
+}: MyLeadsPageProps) {
+  const layoutStorageKey = userIdOverride ? `crm:employee-user-leads:${userIdOverride}` : 'crm:employee-leads';
   const customValuesStorageKey = `${layoutStorageKey}:custom-values`;
   const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
@@ -124,7 +135,8 @@ export default function MyLeadsPage() {
     if (!user) return;
     setLoading(true);
     try {
-      const response = await apiClient.get(`/leads?userId=${user.id}`);
+      const targetUserId = userIdOverride ?? String(user.id);
+      const response = await apiClient.get(`/leads?userId=${targetUserId}`);
       const leads = (Array.isArray(response.data) ? response.data : response.data.data || []) as GridLead[];
       setRowData(leads.map(withNormalizedLead));
     } catch (error) {
@@ -132,7 +144,7 @@ export default function MyLeadsPage() {
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, userIdOverride]);
 
   useEffect(() => {
     fetchData();
@@ -488,7 +500,7 @@ export default function MyLeadsPage() {
       />
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-2xl font-bold text-slate-700 tracking-tight">My Leads</h2>
+          <h2 className="text-2xl font-bold text-slate-700 tracking-tight">{title}</h2>
         </div>
 
         <div className="flex items-center gap-3">
@@ -510,7 +522,7 @@ export default function MyLeadsPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-600" size={18} />
             <input
               type="text"
-              placeholder="Filter my leads..."
+              placeholder={searchPlaceholder}
               className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-md text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64 shadow-sm"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
@@ -565,7 +577,14 @@ export default function MyLeadsPage() {
           }}
           getRowStyle={getRowStyle}
           quickFilterText={searchText}
-          defaultColDef={{ sortable: false, filter: false, resizable: true, suppressHeaderMenuButton: true }}
+          enableBrowserTooltips={true}
+          defaultColDef={{
+            sortable: false,
+            filter: false,
+            resizable: true,
+            suppressHeaderMenuButton: true,
+            tooltipValueGetter: (params) => formatRowTimestampTooltip(params.data),
+          }}
           animateRows={true}
         />
       </div>

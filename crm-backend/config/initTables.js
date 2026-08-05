@@ -47,9 +47,25 @@ export const ensureTables = async () => {
       email VARCHAR(255) NOT NULL UNIQUE,
       password VARCHAR(255) NOT NULL,
       role_id INT NOT NULL DEFAULT 2,
+      visible_to_employees TINYINT(1) NOT NULL DEFAULT 0,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       INDEX idx_users_role_id (role_id)
+    )
+  `);
+
+  const [visibleToEmployeesColumn] = await db.execute(`SHOW COLUMNS FROM users LIKE 'visible_to_employees'`);
+  if (visibleToEmployeesColumn.length === 0) {
+    await db.execute("ALTER TABLE users ADD COLUMN visible_to_employees TINYINT(1) NOT NULL DEFAULT 0 AFTER role_id");
+  }
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS user_employee_visibility (
+      user_id INT NOT NULL,
+      employee_id INT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, employee_id),
+      INDEX idx_user_employee_visibility_employee_id (employee_id)
     )
   `);
 
@@ -63,6 +79,8 @@ export const ensureTables = async () => {
       source VARCHAR(255) NOT NULL DEFAULT '',
       service VARCHAR(255) NOT NULL DEFAULT '',
       notes TEXT NULL,
+      is_date_marker TINYINT(1) NOT NULL DEFAULT 0,
+      marker_date DATE NULL,
       lead_value DECIMAL(10, 2) NOT NULL DEFAULT 0,
       \`lead\` VARCHAR(255) NULL,
       lead_status VARCHAR(100) NOT NULL DEFAULT 'pending',
@@ -98,6 +116,16 @@ export const ensureTables = async () => {
   const [leadNotesColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'notes'`);
   if (leadNotesColumn.length === 0) {
     await db.execute('ALTER TABLE leads ADD COLUMN notes TEXT NULL AFTER service');
+  }
+
+  const [leadIsDateMarkerColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'is_date_marker'`);
+  if (leadIsDateMarkerColumn.length === 0) {
+    await db.execute("ALTER TABLE leads ADD COLUMN is_date_marker TINYINT(1) NOT NULL DEFAULT 0 AFTER notes");
+  }
+
+  const [leadMarkerDateColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'marker_date'`);
+  if (leadMarkerDateColumn.length === 0) {
+    await db.execute('ALTER TABLE leads ADD COLUMN marker_date DATE NULL AFTER is_date_marker');
   }
 
   const [leadSourceColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'source'`);
