@@ -58,9 +58,16 @@ export function mergeOrderedIds(allIds: string[], storedOrder: string[] | undefi
   return [...retained, ...missing];
 }
 
-export function mergeVisibleIds(orderedIds: string[], storedVisible: string[] | undefined) {
+export function mergeVisibleIds(
+  orderedIds: string[],
+  storedVisible: string[] | undefined,
+  previousOrderedIds: string[] = [],
+) {
   if (!storedVisible?.length) return orderedIds;
 
-  const visibleSet = new Set(storedVisible.filter((id) => orderedIds.includes(id)));
-  return orderedIds.filter((id) => visibleSet.has(id) || !storedVisible.includes(id));
+  const previousOrderedIdSet = new Set(previousOrderedIds);
+  const retainedVisibleIds = storedVisible.filter((id) => orderedIds.includes(id));
+  const newIds = orderedIds.filter((id) => !previousOrderedIdSet.has(id) && !storedVisible.includes(id));
+
+  return [...retainedVisibleIds, ...newIds];
 }

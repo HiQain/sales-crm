@@ -250,7 +250,7 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
     const allIds = columnVisibilityOptions.map((column) => column.id);
     const stored = loadColumnLayout(layoutStorageKey);
     const nextOrderedIds = mergeOrderedIds(allIds, stored?.order);
-    const nextVisibleIds = mergeVisibleIds(nextOrderedIds, stored?.visible);
+    const nextVisibleIds = mergeVisibleIds(nextOrderedIds, stored?.visible, stored?.order);
 
     setOrderedColumnIds(nextOrderedIds);
     setVisibleColumnIds(nextVisibleIds);

@@ -497,7 +497,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
 
     const allIds = columnVisibilityOptions.map((column) => column.id);
     const nextOrderedIds = mergeOrderedIds(allIds, orderedColumnIds);
-    const nextVisibleIds = mergeVisibleIds(nextOrderedIds, visibleColumnIds);
+    const nextVisibleIds = mergeVisibleIds(nextOrderedIds, visibleColumnIds, orderedColumnIds);
 
     if (!areStringArraysEqual(nextOrderedIds, orderedColumnIds)) {
       setOrderedColumnIds(nextOrderedIds);
