@@ -141,6 +141,9 @@ const dividerStyle = {
   borderRight: '1px solid rgba(148, 163, 184, 0.45)',
 };
 const RESIZE_MIN_WIDTH = 56;
+const setFilterParams = {
+  suppressSelectAll: true,
+};
 
 const areStringArraysEqual = (left: string[], right: string[]) =>
   left.length === right.length && left.every((value, index) => value === right[index]);
@@ -352,8 +355,8 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       { field: 'email', headerName: 'Email', minWidth: 118, editable: true },
       { field: 'business_owner', headerName: 'Business Owner', minWidth: 118, editable: true },
       { field: 'business_name', headerName: 'Business Name', minWidth: 118, editable: true },
-      { field: 'source', headerName: 'Source', minWidth: 100, editable: true },
-      { field: 'service', headerName: 'Service', minWidth: 92, editable: true, filter: true },
+      { field: 'source', headerName: 'Source', minWidth: 100, editable: true, filter: true, filterParams: setFilterParams },
+      { field: 'service', headerName: 'Service', minWidth: 92, editable: true, filter: true, filterParams: setFilterParams },
       {
         field: 'notes',
         headerName: 'Notes',
@@ -411,6 +414,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         minWidth: 92,
         editable: true,
         filter: true,
+        filterParams: setFilterParams,
         cellEditor: 'agSelectCellEditor',
         cellEditorParams: { values: employees.map((employee) => employee.username) }
       },
@@ -419,6 +423,8 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         headerName: 'Status',
         minWidth: 104,
         editable: true,
+        filter: true,
+        filterParams: setFilterParams,
         cellRenderer: StatusBadge,
         cellEditor: 'agTextCellEditor',
       },
@@ -429,6 +435,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         minWidth: 140,
         editable: true,
         filter: true,
+        filterParams: setFilterParams,
       })),
       {
         colId: 'actions',
@@ -639,6 +646,22 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             },
           }));
         }
+        if (createdLeadId != null) {
+          const nextLeadId = String(createdLeadId);
+          const dateMarkerIds = dateMarkerRows.map((row) => String(row.id));
+
+          setManualRowOrder((prev) => {
+            const fallbackOrder = [
+              ...dateMarkerIds,
+              ...rowData.map((row) => String(row.id)),
+            ];
+            const baseOrder = prev.length > 0 ? prev : fallbackOrder;
+            const orderWithoutNewLead = baseOrder.filter((id) => id !== nextLeadId);
+            const remainingIds = orderWithoutNewLead.filter((id) => !dateMarkerIds.includes(id));
+
+            return [...dateMarkerIds, nextLeadId, ...remainingIds];
+          });
+        }
         fetchData();
       } catch (error) {
         console.error('Create failed:', error);
@@ -815,9 +838,9 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     <div className="p-2 h-full flex flex-col space-y-2 animate-in fade-in duration-500">
       <ConfirmDialog
         open={leadPendingDelete != null}
-        title="Delete lead?"
-        message="This will permanently remove the lead from the table. You can’t undo this action."
-        confirmLabel="Delete Lead"
+        title="Delete row?"
+        message="This will permanently remove the row from the table. You can’t undo this action."
+        confirmLabel="Delete Row"
         onConfirm={deleteLead}
         onCancel={() => !deleteLoading && setLeadPendingDelete(null)}
         loading={deleteLoading}
