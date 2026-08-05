@@ -78,7 +78,7 @@ export const getLeads = async (req, res) => {
       params.push(userId);
     }
 
-    query += ` ORDER BY created_at DESC`;
+    query += ` ORDER BY sort_order ASC, created_at DESC, id DESC`;
 
     const [leads] = await db.execute(query, params);
     res.json(leads.map(serializeLead));
@@ -103,11 +103,16 @@ export const createLead = async (req, res) => {
   } = payload;
 
   try {
+    const [sortOrderRows] = await db.execute(
+      'SELECT COALESCE(MAX(sort_order), 0) AS maxSortOrder FROM leads',
+    );
+    const nextSortOrder = Number(sortOrderRows[0]?.maxSortOrder ?? 0) + 1;
+
     const [result] = await db.execute(`
       INSERT INTO leads 
       (contact, email, business_owner, business_name, source, service, notes,
-       is_date_marker, marker_date, lead_value, \`lead\`, lead_status, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       is_date_marker, marker_date, sort_order, lead_value, \`lead\`, lead_status, assigned_user, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       contact || '',
       email || '',
@@ -118,6 +123,7 @@ export const createLead = async (req, res) => {
       notes,
       is_date_marker ? 1 : 0,
       marker_date || null,
+      nextSortOrder,
       lead_value || 0,
       lead || null,
       lead_status || 'pending',
@@ -166,5 +172,52 @@ export const deleteLead = async (req, res) => {
     res.json({ message: 'Lead deleted successfully' });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to delete lead' } });
+  }
+};
+
+export const reorderLeads = async (req, res) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ error: { message: 'Forbidden' } });
+  }
+
+  const leadIds = Array.isArray(req.body?.leadIds)
+    ? req.body.leadIds.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0)
+    : [];
+
+  if (leadIds.length === 0) {
+    return res.status(400).json({ error: { message: 'No lead ids provided' } });
+  }
+
+  const connection = await db.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const placeholders = leadIds.map(() => '?').join(', ');
+    const [rows] = await connection.execute(
+      `SELECT id FROM leads WHERE id IN (${placeholders})`,
+      leadIds,
+    );
+
+    if ((rows).length !== leadIds.length) {
+      await connection.rollback();
+      return res.status(400).json({ error: { message: 'Some lead ids are invalid' } });
+    }
+
+    for (let index = 0; index < leadIds.length; index += 1) {
+      await connection.execute(
+        'UPDATE leads SET sort_order = ? WHERE id = ?',
+        [index + 1, leadIds[index]],
+      );
+    }
+
+    await connection.commit();
+    res.json({ message: 'Lead order updated successfully' });
+  } catch (err) {
+    await connection.rollback();
+    console.error(err);
+    res.status(500).json({ error: { message: 'Failed to update lead order' } });
+  } finally {
+    connection.release();
   }
 };

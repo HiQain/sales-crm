@@ -81,6 +81,7 @@ export const ensureTables = async () => {
       notes TEXT NULL,
       is_date_marker TINYINT(1) NOT NULL DEFAULT 0,
       marker_date DATE NULL,
+      sort_order BIGINT NULL,
       lead_value DECIMAL(10, 2) NOT NULL DEFAULT 0,
       \`lead\` VARCHAR(255) NULL,
       lead_status VARCHAR(100) NOT NULL DEFAULT 'pending',
@@ -127,6 +128,22 @@ export const ensureTables = async () => {
   if (leadMarkerDateColumn.length === 0) {
     await db.execute('ALTER TABLE leads ADD COLUMN marker_date DATE NULL AFTER is_date_marker');
   }
+
+  const [leadSortOrderColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'sort_order'`);
+  if (leadSortOrderColumn.length === 0) {
+    await db.execute('ALTER TABLE leads ADD COLUMN sort_order BIGINT NULL AFTER marker_date');
+  }
+
+  await db.execute(`
+    SET @lead_sort_order := 0
+  `);
+
+  await db.execute(`
+    UPDATE leads
+    SET sort_order = (@lead_sort_order := @lead_sort_order + 1)
+    WHERE sort_order IS NULL
+    ORDER BY created_at DESC, id DESC
+  `);
 
   const [leadSourceColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'source'`);
   if (leadSourceColumn.length === 0) {

@@ -153,20 +153,6 @@ const withNormalizedLead = (lead: GridLead): GridLead => ({
   contact: normalizeUsPhoneForStorage(lead.contact) ?? lead.contact,
 });
 
-const loadStoredRowOrder = (storageKey: string): string[] => {
-  if (typeof window === 'undefined') return [];
-
-  try {
-    const stored = window.localStorage.getItem(storageKey);
-    if (!stored) return [];
-
-    const parsed = JSON.parse(stored);
-    return Array.isArray(parsed) ? parsed.map((value) => String(value)) : [];
-  } catch {
-    return [];
-  }
-};
-
 const formatMarkerDate = (dateValue: string) => {
   const trimmedValue = String(dateValue ?? '').trim();
   const isoMatch = trimmedValue.match(/^(\d{4}-\d{2}-\d{2})$/);
@@ -200,13 +186,11 @@ const formatMarkerDate = (dateValue: string) => {
 export default function LeadsPage({ userId }: { userId?: string }) {
   const layoutStorageKey = userId ? `crm:admin-user-leads:${userId}` : 'crm:admin-leads';
   const customValuesStorageKey = `${layoutStorageKey}:custom-values`;
-  const rowOrderStorageKey = `${layoutStorageKey}:row-order`;
   const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
   const [dateFilter, setDateFilter] = useState<LeadDateFilterValue>('all');
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
-  const [manualRowOrder, setManualRowOrder] = useState<string[]>(() => loadStoredRowOrder(rowOrderStorageKey));
   const [draftRow, setDraftRow] = useState<GridLead>(createEmptyLead);
   const [leadPendingDelete, setLeadPendingDelete] = useState<number | string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -517,10 +501,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     saveCustomColumnValues(customValuesStorageKey, customColumnValues);
   }, [customColumnValues, customValuesStorageKey]);
 
-  useEffect(() => {
-    window.localStorage.setItem(rowOrderStorageKey, JSON.stringify(manualRowOrder));
-  }, [manualRowOrder, rowOrderStorageKey]);
-
   const customColumnIdSet = useMemo(
     () => new Set(customColumns.map((column) => column.id)),
     [customColumns],
@@ -626,21 +606,8 @@ export default function LeadsPage({ userId }: { userId?: string }) {
           }));
         }
         if (createdLeadId != null) {
-          const nextLeadId = String(createdLeadId);
-          const dateMarkerIds = rowData
-            .filter((row) => row.is_date_marker)
-            .map((row) => String(row.id));
-
-          setManualRowOrder((prev) => {
-            const fallbackOrder = [
-              ...dateMarkerIds,
-              ...rowData.map((row) => String(row.id)),
-            ];
-            const baseOrder = prev.length > 0 ? prev : fallbackOrder;
-            const orderWithoutNewLead = baseOrder.filter((id) => id !== nextLeadId);
-            const remainingIds = orderWithoutNewLead.filter((id) => !dateMarkerIds.includes(id));
-
-            return [...dateMarkerIds, nextLeadId, ...remainingIds];
+          await apiClient.put('/leads/reorder', {
+            leadIds: [...rowData.map((row) => Number(row.id)), Number(createdLeadId)],
           });
         }
         fetchData();
@@ -705,30 +672,14 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       ...row,
       ...(customColumnValues[String(row.id)] ?? {}),
     }));
-    const dateMarkerRows = rowsWithCustomValues.filter((row) => row.is_date_marker) as DateMarkerRow[];
-    const standardRows = rowsWithCustomValues.filter((row) => !row.is_date_marker);
-
-    const combinedRows = [
-      ...dateMarkerRows,
-      ...filterLeadsByDate(standardRows, dateFilter),
-    ];
-
-    if (manualRowOrder.length === 0) {
-      return combinedRows;
+    if (dateFilter === 'all') {
+      return rowsWithCustomValues;
     }
 
-    const orderLookup = new Map(manualRowOrder.map((id, index) => [id, index]));
-
-    return [...combinedRows].sort((left, right) => {
-      const leftIndex = orderLookup.get(String(left.id));
-      const rightIndex = orderLookup.get(String(right.id));
-
-      if (leftIndex == null && rightIndex == null) return 0;
-      if (leftIndex == null) return 1;
-      if (rightIndex == null) return -1;
-      return leftIndex - rightIndex;
-    });
-  }, [customColumnValues, dateFilter, manualRowOrder, rowData]);
+    return rowsWithCustomValues.filter((row) => (
+      row.is_date_marker || filterLeadsByDate([row], dateFilter).length > 0
+    ));
+  }, [customColumnValues, dateFilter, rowData]);
   const pinnedBottomRowData = useMemo(() => [draftRow], [draftRow]);
 
   const handleAddDateClick = useCallback(() => {
@@ -760,7 +711,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       };
 
       setRowData((prev) => [markerRow, ...prev]);
-      setManualRowOrder((prev) => [String(markerRow.id), ...prev.filter((id) => id !== String(markerRow.id))]);
     }).catch((error) => {
       console.error('Create date marker failed:', error);
     });
@@ -813,16 +763,28 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   }, []);
 
   const handleRowDragEnd = useCallback((event: RowDragEndEvent<GridLead>) => {
-    const orderedIds: string[] = [];
+    const orderedIds: number[] = [];
 
-    event.api.forEachNodeAfterFilterAndSort((node) => {
+    event.api.forEachNode((node) => {
       if (!node.rowPinned && node.data) {
-        orderedIds.push(String(node.data.id));
+        orderedIds.push(Number(node.data.id));
       }
     });
 
-    setManualRowOrder(orderedIds);
-  }, []);
+    setRowData((prev) => {
+      const byId = new Map(prev.map((row) => [Number(row.id), row]));
+      return orderedIds
+        .map((id) => byId.get(id))
+        .filter((row): row is GridLead => Boolean(row));
+    });
+
+    void apiClient.put('/leads/reorder', {
+      leadIds: orderedIds,
+    }).catch((error) => {
+      console.error('Row reorder failed:', error);
+      fetchData();
+    });
+  }, [fetchData]);
 
   return (
     <div className="p-2 h-full flex flex-col space-y-2 animate-in fade-in duration-500">

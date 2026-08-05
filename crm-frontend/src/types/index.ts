@@ -30,6 +30,7 @@ export interface Lead {
   notes: string;
   is_date_marker?: boolean;
   marker_date?: string;
+  sort_order?: number;
   lead_value: number;
   lead: string;
   lead_status: LeadStatus;
