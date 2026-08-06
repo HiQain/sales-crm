@@ -34,6 +34,7 @@ export interface Lead {
   lead_value: number;
   lead: string;
   lead_status: LeadStatus;
+  brand?: string;
   payment_date: string;
   payment_amount: number;
   created_at?: string;

@@ -150,6 +150,18 @@ const buildSharedLeadDateFilterSql = (columnName, filter) => {
   return '1=1';
 };
 
+const buildSharedLeadBrandFilterSql = (columnName, filter) => {
+  if (filter === 'designSpartans') {
+    return `${columnName} = 'Design Spartans'`;
+  }
+
+  if (filter === 'uslaw') {
+    return `${columnName} = 'US Logo and Web'`;
+  }
+
+  return '1=1';
+};
+
 export const getLeads = async (req, res) => {
   const { userId } = req.query;
 
@@ -163,7 +175,7 @@ export const getLeads = async (req, res) => {
       params.push(userId);
     } else if (!isAdmin(req.user)) {
       const [sharedRows] = await db.execute(
-        'SELECT user_id, lead_status_filter, date_filter FROM user_employee_visibility WHERE employee_id = ? ORDER BY user_id ASC',
+        'SELECT user_id, lead_status_filter, date_filter, brand_filter FROM user_employee_visibility WHERE employee_id = ? ORDER BY user_id ASC',
         [req.user.id],
       );
 
@@ -178,6 +190,7 @@ export const getLeads = async (req, res) => {
 
         const statusFilter = String(row.lead_status_filter || 'all');
         const dateFilter = String(row.date_filter || 'all');
+        const brandFilter = String(row.brand_filter || 'all');
         const clauseParts = ['leads.assigned_user = ?'];
         const clauseParams = [sharedUserId];
 
@@ -188,6 +201,7 @@ export const getLeads = async (req, res) => {
         }
 
         clauseParts.push(buildSharedLeadDateFilterSql('leads.created_at', dateFilter));
+        clauseParts.push(buildSharedLeadBrandFilterSql('leads.brand', brandFilter));
 
         return [{
           clause: `(${clauseParts.join(' AND ')})`,
@@ -238,7 +252,7 @@ export const createLead = async (req, res) => {
 
   const {
     contact, email, business_owner, business_name, source, service, notes,
-    is_date_marker, marker_date, lead_value, lead, lead_status, assigned_user
+    is_date_marker, marker_date, lead_value, lead, lead_status, brand, assigned_user
   } = payload;
 
   try {
@@ -252,8 +266,8 @@ export const createLead = async (req, res) => {
     const [result] = await db.execute(`
       INSERT INTO leads 
       (contact, email, business_owner, business_name, source, service, notes,
-       is_date_marker, marker_date, sort_order, lead_value, \`lead\`, lead_status, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       is_date_marker, marker_date, sort_order, lead_value, \`lead\`, lead_status, brand, assigned_user, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       contact || '',
       email || '',
@@ -268,6 +282,7 @@ export const createLead = async (req, res) => {
       lead_value || 0,
       lead || null,
       lead_status || 'pending',
+      brand || '',
       Object.prototype.hasOwnProperty.call(payload, 'assigned_user') ? assigned_user ?? null : req.user.id,
       req.user.id
     ]);

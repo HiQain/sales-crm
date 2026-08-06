@@ -65,6 +65,7 @@ export const ensureTables = async () => {
       employee_id INT NOT NULL,
       lead_status_filter VARCHAR(20) NOT NULL DEFAULT 'all',
       date_filter VARCHAR(30) NOT NULL DEFAULT 'all',
+      brand_filter VARCHAR(30) NOT NULL DEFAULT 'all',
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, employee_id),
       INDEX idx_user_employee_visibility_employee_id (employee_id)
@@ -79,6 +80,11 @@ export const ensureTables = async () => {
   const [visibilityDateFilterColumn] = await db.execute(`SHOW COLUMNS FROM user_employee_visibility LIKE 'date_filter'`);
   if (visibilityDateFilterColumn.length === 0) {
     await db.execute("ALTER TABLE user_employee_visibility ADD COLUMN date_filter VARCHAR(30) NOT NULL DEFAULT 'all' AFTER lead_status_filter");
+  }
+
+  const [visibilityBrandFilterColumn] = await db.execute(`SHOW COLUMNS FROM user_employee_visibility LIKE 'brand_filter'`);
+  if (visibilityBrandFilterColumn.length === 0) {
+    await db.execute("ALTER TABLE user_employee_visibility ADD COLUMN brand_filter VARCHAR(30) NOT NULL DEFAULT 'all' AFTER date_filter");
   }
 
   await db.execute(`
@@ -121,6 +127,7 @@ export const ensureTables = async () => {
       lead_value DECIMAL(10, 2) NOT NULL DEFAULT 0,
       \`lead\` VARCHAR(255) NULL,
       lead_status VARCHAR(100) NOT NULL DEFAULT 'pending',
+      brand VARCHAR(100) NOT NULL DEFAULT '',
       assigned_user INT NULL,
       created_by INT NULL,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -153,6 +160,11 @@ export const ensureTables = async () => {
   const [leadNotesColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'notes'`);
   if (leadNotesColumn.length === 0) {
     await db.execute('ALTER TABLE leads ADD COLUMN notes TEXT NULL AFTER service');
+  }
+
+  const [leadBrandColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'brand'`);
+  if (leadBrandColumn.length === 0) {
+    await db.execute("ALTER TABLE leads ADD COLUMN brand VARCHAR(100) NOT NULL DEFAULT '' AFTER lead_status");
   }
 
   const [leadIsDateMarkerColumn] = await db.execute(`SHOW COLUMNS FROM leads LIKE 'is_date_marker'`);
