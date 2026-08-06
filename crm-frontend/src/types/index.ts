@@ -38,7 +38,7 @@ export interface Lead {
   payment_amount: number;
   created_at?: string;
   updated_at?: string;
-  assigned_user?: User;
+  assigned_user?: User | number;
 }
 
 export interface ClientJourney {

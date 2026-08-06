@@ -3,6 +3,17 @@ import { authenticate } from '../middleware/auth.js';
 import db from '../config/db.js';
 
 const router = express.Router();
+const ALLOWED_SHARE_STATUS_FILTERS = new Set(['all', 'paid', 'unpaid']);
+const ALLOWED_SHARE_DATE_FILTERS = new Set([
+  'all',
+  'last7Days',
+  'last3Months',
+  'last6Months',
+  'thisMonth',
+  'lastMonth',
+  'thisYear',
+  'lastYear',
+]);
 
 // Get all users (Admin only)
 router.get('/', authenticate, async (req, res) => {
@@ -40,6 +51,8 @@ router.get('/:id/employee-visibility', authenticate, async (req, res) => {
 
     res.json({
       employeeIds: rows.map((row) => Number(row.employee_id)),
+      leadStatusFilter: rows[0]?.lead_status_filter || 'all',
+      dateFilter: rows[0]?.date_filter || 'all',
     });
   } catch (err) {
     console.error(err);
@@ -55,6 +68,12 @@ router.put('/:id/employee-visibility', authenticate, async (req, res) => {
   const employeeIds = Array.isArray(req.body?.employeeIds)
     ? Array.from(new Set(req.body.employeeIds.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0)))
     : [];
+  const leadStatusFilter = ALLOWED_SHARE_STATUS_FILTERS.has(String(req.body?.leadStatusFilter))
+    ? String(req.body.leadStatusFilter)
+    : 'all';
+  const dateFilter = ALLOWED_SHARE_DATE_FILTERS.has(String(req.body?.dateFilter))
+    ? String(req.body.dateFilter)
+    : 'all';
 
   const connection = await db.getConnection();
 
@@ -67,9 +86,10 @@ router.put('/:id/employee-visibility', authenticate, async (req, res) => {
 
     if (employeeIds.length > 0) {
       const placeholders = employeeIds.map(() => '(?, ?)').join(', ');
-      const values = employeeIds.flatMap((employeeId) => [req.params.id, employeeId]);
+      const placeholdersWithFilters = employeeIds.map(() => '(?, ?, ?, ?)').join(', ');
+      const values = employeeIds.flatMap((employeeId) => [req.params.id, employeeId, leadStatusFilter, dateFilter]);
       await connection.execute(
-        `INSERT INTO user_employee_visibility (user_id, employee_id) VALUES ${placeholders}`,
+        `INSERT INTO user_employee_visibility (user_id, employee_id, lead_status_filter, date_filter) VALUES ${placeholdersWithFilters}`,
         values,
       );
     }

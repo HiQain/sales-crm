@@ -63,9 +63,45 @@ export const ensureTables = async () => {
     CREATE TABLE IF NOT EXISTS user_employee_visibility (
       user_id INT NOT NULL,
       employee_id INT NOT NULL,
+      lead_status_filter VARCHAR(20) NOT NULL DEFAULT 'all',
+      date_filter VARCHAR(30) NOT NULL DEFAULT 'all',
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, employee_id),
       INDEX idx_user_employee_visibility_employee_id (employee_id)
+    )
+  `);
+
+  const [visibilityStatusFilterColumn] = await db.execute(`SHOW COLUMNS FROM user_employee_visibility LIKE 'lead_status_filter'`);
+  if (visibilityStatusFilterColumn.length === 0) {
+    await db.execute("ALTER TABLE user_employee_visibility ADD COLUMN lead_status_filter VARCHAR(20) NOT NULL DEFAULT 'all' AFTER employee_id");
+  }
+
+  const [visibilityDateFilterColumn] = await db.execute(`SHOW COLUMNS FROM user_employee_visibility LIKE 'date_filter'`);
+  if (visibilityDateFilterColumn.length === 0) {
+    await db.execute("ALTER TABLE user_employee_visibility ADD COLUMN date_filter VARCHAR(30) NOT NULL DEFAULT 'all' AFTER lead_status_filter");
+  }
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS table_layouts (
+      table_key VARCHAR(255) PRIMARY KEY,
+      layout_json LONGTEXT NOT NULL,
+      created_by INT NULL,
+      updated_by INT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS lead_view_orders (
+      user_id INT NOT NULL,
+      lead_id INT NOT NULL,
+      sort_order BIGINT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, lead_id),
+      INDEX idx_lead_view_orders_user_sort (user_id, sort_order),
+      INDEX idx_lead_view_orders_lead_id (lead_id)
     )
   `);
 

@@ -10,14 +10,10 @@ import AdminLeadsPage from './pages/admin/LeadsPage';
 import SalesRecordsPage from './pages/admin/SalesRecordsPage';
 import BillingsPage from './pages/admin/BillingsPage';
 import UsersPage from './pages/admin/UsersPage';
-import UserLeadsPage from './pages/admin/UserLeadsPage';
 
 // Employee Pages
-import MyLeadsPage from './pages/employee/MyLeadsPage';
 import MySalesRecordsPage from './pages/employee/MySalesRecordsPage';
 import MyBillingsPage from './pages/employee/MyBillingsPage';
-import EmployeeUsersPage from './pages/employee/UsersPage';
-import EmployeeUserLeadsPage from './pages/employee/UserLeadsPage';
 
 export default function App() {
   return (
@@ -35,7 +31,6 @@ export default function App() {
               <Route path="client-journeys" element={<SalesRecordsPage />} />
               <Route path="billings" element={<BillingsPage />} />
               <Route path="users" element={<UsersPage />} />
-              <Route path="users/:id/leads" element={<UserLeadsPage />} />
             </Route>
           </Route>
 
@@ -43,11 +38,9 @@ export default function App() {
           <Route element={<ProtectedRoute allowedRoles={['employee', 'authenticated']} />}>
             <Route path="/employee" element={<EmployeeLayout />}>
               <Route index element={<Navigate to="/employee/leads" replace />} />
-              <Route path="leads" element={<MyLeadsPage />} />
+              <Route path="leads" element={<AdminLeadsPage />} />
               <Route path="client-journeys" element={<MySalesRecordsPage />} />
               <Route path="billings" element={<MyBillingsPage />} />
-              <Route path="users" element={<EmployeeUsersPage />} />
-              <Route path="users/:id/leads" element={<EmployeeUserLeadsPage />} />
             </Route>
           </Route>
 
