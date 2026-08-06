@@ -1458,9 +1458,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             </div>
 
             <div className="flex flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:px-8 sm:py-5 lg:flex-row lg:items-center lg:justify-between">
-              <p className="text-sm text-slate-500">
-                Changes will be applied immediately.
-              </p>
               <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:justify-end">
                 <button
                   type="button"
