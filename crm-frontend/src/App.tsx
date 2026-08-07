@@ -12,6 +12,7 @@ import BillingsPage from './pages/admin/BillingsPage';
 import UsersPage from './pages/admin/UsersPage';
 
 // Employee Pages
+import MyLeadsPage from './pages/employee/MyLeadsPage';
 import MySalesRecordsPage from './pages/employee/MySalesRecordsPage';
 import MyBillingsPage from './pages/employee/MyBillingsPage';
 
@@ -38,7 +39,7 @@ export default function App() {
           <Route element={<ProtectedRoute allowedRoles={['employee', 'authenticated']} />}>
             <Route path="/employee" element={<EmployeeLayout />}>
               <Route index element={<Navigate to="/employee/leads" replace />} />
-              <Route path="leads" element={<AdminLeadsPage />} />
+              <Route path="leads" element={<MyLeadsPage />} />
               <Route path="client-journeys" element={<MySalesRecordsPage />} />
               <Route path="billings" element={<MyBillingsPage />} />
             </Route>

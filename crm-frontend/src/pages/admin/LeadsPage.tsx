@@ -1,7 +1,9 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import type {
+  CellClickedEvent,
   ColDef,
+  CellFocusedEvent,
   CellValueChangedEvent,
   ColumnMovedEvent,
   ColumnResizedEvent,
@@ -45,11 +47,9 @@ type VisibilityUser = Pick<User, 'id' | 'username' | 'email' | 'role_type'> & {
   visible_to_employees?: boolean;
 };
 type ShareLeadStatusFilter = 'all' | 'paid' | 'unpaid';
-type ShareBrandFilter = 'all' | 'designSpartans' | 'uslaw';
 type ShareRule = {
   leadStatusFilter: ShareLeadStatusFilter;
   dateFilter: LeadDateFilterValue;
-  brandFilter: ShareBrandFilter;
 };
 type DateMarkerRow = GridLead & {
   markerDate: string;
@@ -69,12 +69,38 @@ const glassTheme = themeQuartz.withParams({
   headerColumnBorder: true,
 });
 
-const LEAD_BRAND_OPTIONS = ['', 'US Logo and Web', 'Design Spartans'] as const;
-const SHARE_BRAND_FILTER_OPTIONS: Array<{ value: ShareBrandFilter; label: string }> = [
-  { value: 'all', label: 'All Brands' },
-  { value: 'designSpartans', label: 'DS' },
-  { value: 'uslaw', label: 'USLAW' },
+const SHARE_LEAD_STATUS_OPTIONS: Array<{ value: ShareLeadStatusFilter; label: string }> = [
+  { value: 'all', label: 'All Leads' },
+  { value: 'paid', label: 'Paid' },
+  { value: 'unpaid', label: 'Unpaid' },
 ];
+
+const formatSelectedCellPreview = (value: unknown) => {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value instanceof Date) return value.toLocaleString();
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const hasCellValue = (
+  event: CellFocusedEvent | CellValueChangedEvent | CellClickedEvent,
+): event is CellValueChangedEvent | CellClickedEvent => 'value' in event;
+
+const getPreviewValueFromRow = (rowData: Record<string, unknown> | undefined, column: ColDef) => {
+  if (!rowData) return '';
+
+  const fieldKey = typeof column.field === 'string' ? column.field : undefined;
+  const colIdKey = typeof column.colId === 'string' ? column.colId : undefined;
+  const key = fieldKey ?? colIdKey;
+
+  return key ? rowData[key] : '';
+};
 
 const StatusBadge = (params: ICellRendererParams) => {
   if ((params.data as DateMarkerRow | undefined)?.is_date_marker) {
@@ -144,39 +170,6 @@ const ActionsCellRenderer = (
   );
 };
 
-const BrandBadge = (params: ICellRendererParams) => {
-  if ((params.data as DateMarkerRow | undefined)?.is_date_marker) {
-    return null;
-  }
-
-  const value = String(params.value || '').trim();
-  if (!value) {
-    return null;
-  }
-
-  const shortLabel = value === 'Design Spartans'
-    ? 'DS'
-    : value === 'US Logo and Web'
-      ? 'USLAW'
-      : value;
-
-  let baseColor = 'bg-slate-100 text-slate-700 border-slate-300/40';
-
-  if (value === 'US Logo and Web') {
-    baseColor = 'bg-sky-100 text-sky-700 border-sky-300/40';
-  } else if (value === 'Design Spartans') {
-    baseColor = 'bg-violet-100 text-violet-700 border-violet-300/40';
-  }
-
-  return (
-    <div className="flex h-full items-center justify-center">
-      <span className={`max-w-full truncate rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest leading-none ${baseColor}`}>
-        {shortLabel}
-      </span>
-    </div>
-  );
-};
-
 const createEmptyLead = (): GridLead => ({
   id: -1,
   contact: '',
@@ -190,7 +183,6 @@ const createEmptyLead = (): GridLead => ({
   lead_value: 0,
   lead: '',
   lead_status: 'pending',
-  brand: '',
   payment_date: '',
   payment_amount: 0,
   __isDraft: true,
@@ -283,6 +275,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
+  const [selectedCellPreview, setSelectedCellPreview] = useState('');
   const [dateFilter, setDateFilter] = useState<LeadDateFilterValue>('all');
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [usersForVisibility, setUsersForVisibility] = useState<VisibilityUser[]>([]);
@@ -493,16 +486,8 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       String(entry.email ?? '').toLowerCase().includes(query)
     ));
   }, [selectedSourceUserIds, targetUsers, visibilitySearch]);
-  const selectedSourceUsers = useMemo(
-    () => sourceUsers.filter((entry) => selectedSourceUserIds.includes(Number(entry.id))),
-    [selectedSourceUserIds, sourceUsers],
-  );
-  const activeVisibilityUser = useMemo(
-    () => sourceUsers.find((entry) => Number(entry.id) === activeVisibilityUserId) ?? null,
-    [activeVisibilityUserId, sourceUsers],
-  );
   const getShareRule = useCallback((userId: number): ShareRule => (
-    shareRulesByUserId[userId] ?? { leadStatusFilter: 'all', dateFilter: 'all', brandFilter: 'all' }
+    shareRulesByUserId[userId] ?? { leadStatusFilter: 'all', dateFilter: 'all' }
   ), [shareRulesByUserId]);
 
   const columnDefs = useMemo<ColDef<GridLead>[]>(() => {
@@ -542,12 +527,24 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         headerName: 'Notes',
         minWidth: 180,
         editable: isAdmin ? true : employeeEditable,
-        cellEditor: 'agLargeTextCellEditor',
-        cellEditorPopup: true,
+        valueParser: (params) => String(params.newValue ?? ''),
+        valueSetter: (params) => {
+          if (!params.data) return false;
+
+          const nextValue = String(params.newValue ?? '');
+          const previousValue = String((params.data as GridLead).notes ?? '');
+          if (previousValue === nextValue) return false;
+
+          (params.data as GridLead).notes = nextValue;
+          return true;
+        },
         cellEditorSelector: (params) => (
           (params.data as DateMarkerRow | undefined)?.is_date_marker
             ? { component: 'agDateStringCellEditor' }
-            : undefined
+            : {
+                component: 'agLargeTextCellEditor',
+                popup: true,
+              }
         ),
         valueFormatter: (params) => {
           const markerRow = params.data as DateMarkerRow | undefined;
@@ -611,17 +608,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         filterParams: setFilterParams,
         cellRenderer: StatusBadge,
         cellEditor: 'agTextCellEditor',
-      },
-      {
-        field: 'brand',
-        headerName: 'Brand',
-        minWidth: 138,
-        editable: isAdmin ? true : employeeEditable,
-        filter: true,
-        filterParams: setFilterParams,
-        cellRenderer: BrandBadge,
-        cellEditor: 'agSelectCellEditor',
-        cellEditorParams: { values: [...LEAD_BRAND_OPTIONS] },
       },
       ...customColumns.map<ColDef<GridLead>>((column) => ({
         colId: column.id,
@@ -835,7 +821,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
           lead_value: nextDraft.lead_value,
           lead: nextDraft.lead,
           lead_status: nextDraft.lead_status || 'pending',
-          brand: String(nextDraft.brand ?? ''),
           assigned_user: isAdmin && userId ? Number(userId) : undefined,
         });
 
@@ -947,7 +932,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         [sourceUserId]: {
           leadStatusFilter: (response.data?.leadStatusFilter as ShareLeadStatusFilter) || 'all',
           dateFilter: (response.data?.dateFilter as LeadDateFilterValue) || 'all',
-          brandFilter: (response.data?.brandFilter as ShareBrandFilter) || 'all',
         },
       }));
 
@@ -980,7 +964,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             employeeIds: selectedTargetEmployeeIds,
             leadStatusFilter: getShareRule(sourceUserId).leadStatusFilter,
             dateFilter: getShareRule(sourceUserId).dateFilter,
-            brandFilter: getShareRule(sourceUserId).brandFilter,
           })
         )),
       );
@@ -1013,7 +996,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             employeeIds: [],
             leadStatusFilter: 'all',
             dateFilter: 'all',
-            brandFilter: 'all',
           })
         )),
       );
@@ -1022,7 +1004,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         Object.fromEntries(
           Object.entries(current).map(([userId]) => [
             Number(userId),
-            { leadStatusFilter: 'all', dateFilter: 'all', brandFilter: 'all' },
+            { leadStatusFilter: 'all', dateFilter: 'all' },
           ]),
         )
       ));
@@ -1042,7 +1024,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     setShareRulesByUserId((current) => ({
       ...current,
       [sourceUserId]: {
-        ...(current[sourceUserId] ?? { leadStatusFilter: 'all', dateFilter: 'all', brandFilter: 'all' }),
+        ...(current[sourceUserId] ?? { leadStatusFilter: 'all', dateFilter: 'all' }),
         ...nextRule,
       },
     }));
@@ -1093,6 +1075,39 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   }, [canViewDateMarker, customColumnValues, dateFilter, rowData]);
   const pinnedBottomRowData = useMemo(() => [draftRow], [draftRow]);
 
+  const updateSelectedCellPreview = useCallback((event: CellFocusedEvent | CellValueChangedEvent | CellClickedEvent) => {
+    if (hasCellValue(event)) {
+      setSelectedCellPreview(formatSelectedCellPreview(event.value));
+      return;
+    }
+
+    const focusedCell = event.api.getFocusedCell();
+    const column = focusedCell?.column ?? event.column;
+    const rowIndex = focusedCell?.rowIndex ?? event.rowIndex;
+    const rowPinned = focusedCell?.rowPinned ?? event.rowPinned;
+
+    if (!column || rowIndex == null) {
+      setSelectedCellPreview('');
+      return;
+    }
+
+    if (rowPinned) {
+      setSelectedCellPreview('');
+      return;
+    }
+
+    const rowNode = event.api.getDisplayedRowAtIndex(rowIndex);
+    if (!rowNode) {
+      setSelectedCellPreview('');
+      return;
+    }
+
+    const columnDefinition = typeof column === 'string' ? { field: column } : column.getColDef();
+    setSelectedCellPreview(
+      formatSelectedCellPreview(getPreviewValueFromRow(rowNode.data as Record<string, unknown> | undefined, columnDefinition)),
+    );
+  }, []);
+
   const handleAddDateClick = useCallback(() => {
     const today = new Date();
     const value = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
@@ -1109,7 +1124,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       lead_value: 0,
       lead: currentUsername,
       lead_status: 'pending',
-      brand: '',
       assigned_user: userId ? Number(userId) : currentUserId,
     }).then(() => {
       fetchData();
@@ -1185,229 +1199,172 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     <div className="p-2 h-full flex flex-col space-y-2 animate-in fade-in duration-500">
       {isAdmin && visibilityModalOpen && (
         <div className="fixed inset-0 z-[110] overflow-y-auto bg-slate-900/35 p-2 pt-16 backdrop-blur-[2px] sm:p-4 sm:pt-20">
-          <div className="mx-auto flex max-h-[calc(100vh-4.5rem)] w-full max-w-7xl flex-col overflow-hidden rounded-[20px] border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] shadow-2xl sm:max-h-[calc(100vh-6rem)] sm:rounded-[28px]">
+          <div className="mx-auto flex max-h-[calc(100vh-4.5rem)] w-full max-w-7xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] shadow-2xl sm:max-h-[calc(100vh-6rem)]">
             <div className="border-b border-slate-200 bg-white/95 px-5 py-4 sm:px-8 sm:py-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex items-start gap-3">
-                  <div className="hidden h-14 w-14 items-center justify-center rounded-3xl bg-[radial-gradient(circle_at_top,#f5f3ff,white)] text-indigo-600 shadow-sm ring-1 ring-indigo-100 sm:flex">
-                    <Users size={26} />
-                  </div>
-                  <div>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex min-w-0 items-start gap-3">
+                  <div className="min-w-0">
                     <h3 className="text-[34px] font-bold leading-none tracking-tight text-slate-900 sm:text-[18px]">Share Leads Between Users</h3>
                     <p className="mt-1.5 text-sm font-medium text-slate-500">
                       Choose users and set what they can see on the employee side.
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={closeVisibilityModal}
-                  className="rounded-xl p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
-                  disabled={visibilityLoading}
-                >
-                  <X size={22} />
-                </button>
-              </div>
 
-              <div className="mt-4">
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-                  <input
-                    type="text"
-                    value={visibilitySearch}
-                    onChange={(event) => setVisibilitySearch(event.target.value)}
-                    placeholder="Search users..."
-                    className="w-full rounded-2xl border border-slate-200 bg-white py-3 pl-14 pr-4 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
-                  />
+                <div className="flex items-start gap-3 lg:w-full lg:max-w-[520px] lg:items-center lg:justify-end">
+                  <div className="relative flex-1">
+                    <Search className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                    <input
+                      type="text"
+                      value={visibilitySearch}
+                      onChange={(event) => setVisibilitySearch(event.target.value)}
+                      placeholder="Search users..."
+                      className="w-full rounded-md border border-slate-200 bg-white py-3 pl-14 pr-4 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeVisibilityModal}
+                    className="rounded-md p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                    disabled={visibilityLoading}
+                  >
+                    <X size={22} />
+                  </button>
                 </div>
               </div>
             </div>
 
             <div className="flex-1 overflow-y-auto">
-              <div className="border-b border-slate-200 px-5 py-4 sm:px-8 sm:py-4">
-                <div className="mb-3 flex items-center justify-between gap-4">
-                  <div>
-                    <h4 className="text-[28px] font-bold tracking-tight text-slate-900 sm:text-[17px]">1. Select Users</h4>
-                    <p className="mt-1 text-sm text-slate-500">Pick one or more users whose leads you want to share.</p>
-                  </div>
-                  {selectedSourceUserIds.length > 0 && (
-                    <span className="rounded-2xl bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-600">
-                      {selectedSourceUserIds.length} selected
-                    </span>
-                  )}
-                </div>
-
-                <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-4">
-                  {filteredSourceUsers.map((entry) => {
-                    const isSelected = selectedSourceUserIds.includes(Number(entry.id));
-                    const initial = String(entry.username ?? '?').trim().charAt(0).toUpperCase() || '?';
-                    return (
+              <div className="border-b border-slate-200 px-5 py-3 sm:px-8 sm:py-3">
+                <div className="mb-2 flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
+                  <div className="flex items-center gap-3">
+                    {selectedSourceUserIds.length > 0 && (
+                      <span className="rounded-md bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-600">
+                        {selectedSourceUserIds.length} selected
+                      </span>
+                    )}
+                    {selectedSourceUserIds.length > 1 && (
                       <button
-                        key={entry.id}
                         type="button"
-                        onClick={() => loadVisibilityForUser(Number(entry.id))}
-                        className={`flex items-center gap-3 rounded-[18px] border bg-white px-3 py-2.5 text-left shadow-sm transition ${
-                          isSelected
-                            ? 'border-indigo-300 bg-indigo-50/60 ring-2 ring-indigo-500/15'
-                            : 'border-slate-200 hover:border-slate-300 hover:shadow'
-                        }`}
+                        onClick={applyFirstRuleToAllSelected}
+                        disabled={selectedSourceUserIds.length < 2}
+                        className="inline-flex items-center justify-center rounded-md border border-indigo-300 bg-white px-3 py-1.5 text-sm font-semibold text-indigo-600 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-base font-bold text-white ${
-                          entry.role_type === 'admin'
-                            ? 'bg-gradient-to-br from-emerald-500 to-teal-600'
-                            : isSelected
-                              ? 'bg-gradient-to-br from-indigo-500 to-violet-600'
-                              : 'bg-gradient-to-br from-sky-500 to-indigo-500'
-                        }`}>
-                          {initial}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-[15px] font-semibold leading-tight text-slate-800">{entry.username}</p>
-                          <p className="truncate text-[12px] leading-tight text-slate-500">{entry.email}</p>
-                          <p className="mt-0.5 text-[11px] font-semibold leading-tight text-slate-400">
-                            Shared with {entry.visible_employee_count ?? 0} {(entry.visible_employee_count ?? 0) === 1 ? 'user' : 'users'}
-                          </p>
-                        </div>
-                        <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition ${
-                          isSelected
-                            ? 'border-indigo-600 bg-indigo-600 text-white'
-                            : 'border-slate-300 bg-white text-transparent'
-                        }`}>
-                          <Check size={12} />
-                        </div>
+                        Apply to all selected
                       </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="border-b border-slate-200 px-5 py-4 sm:px-8 sm:py-4">
-                <div className="mb-3 flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-                  <div>
-                    <h4 className="text-[28px] font-bold tracking-tight text-slate-900 sm:text-[17px]">2. Access Settings</h4>
-                    <p className="mt-1 text-sm text-slate-500">Choose who can view the selected leads and what filters they should get.</p>
+                    )}
                   </div>
-                  {selectedSourceUserIds.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={applyFirstRuleToAllSelected}
-                      disabled={selectedSourceUserIds.length < 2}
-                      className="inline-flex items-center justify-center rounded-2xl border border-indigo-300 bg-white px-4 py-2 text-sm font-semibold text-indigo-600 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      Apply to all selected
-                    </button>
-                  )}
                 </div>
 
-                {selectedSourceUserIds.length > 0 ? (
-                  <div className="space-y-3">
-                    <div className="rounded-[22px] border border-slate-200 bg-white p-3.5 shadow-sm sm:p-4">
-                      <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <h5 className="text-sm font-bold uppercase tracking-[0.18em] text-slate-400">Viewer Access</h5>
-                          <p className="mt-1 text-sm text-slate-500">Pick which users can view the selected leads.</p>
-                        </div>
+                <div className="space-y-2.5">
+                  <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-3">
+                    <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h5 className="text-sm font-bold uppercase tracking-[0.18em] text-slate-400">Viewer Access</h5>
+                        <p className="mt-1 text-sm text-slate-500">Pick which users can view the selected leads.</p>
                       </div>
-
-                      {filteredTargetUsers.length > 0 ? (
-                        <div className="grid gap-2.5 md:grid-cols-2 xl:grid-cols-3">
-                          {filteredTargetUsers.map((entry) => {
-                            const isSelected = selectedTargetEmployeeIds.includes(Number(entry.id));
-                            const initial = String(entry.username ?? '?').trim().charAt(0).toUpperCase() || '?';
-                            return (
-                              <button
-                                key={entry.id}
-                                type="button"
-                                onClick={() => toggleTargetEmployeeSelection(Number(entry.id))}
-                                className={`flex items-center gap-3 rounded-[18px] border px-3 py-2.5 text-left transition ${
-                                  isSelected
-                                    ? 'border-emerald-300 bg-emerald-50/70 ring-2 ring-emerald-500/10'
-                                    : 'border-slate-200 bg-white hover:border-slate-300'
-                                }`}
-                              >
-                                <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${
-                                  isSelected
-                                    ? 'bg-gradient-to-br from-emerald-500 to-teal-600'
-                                    : 'bg-gradient-to-br from-indigo-500 to-violet-600'
-                                }`}>
-                                  {initial}
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <p className="truncate text-[15px] font-semibold leading-tight text-slate-800">{entry.username}</p>
-                                  <p className="truncate text-[12px] leading-tight text-slate-500">{entry.email}</p>
-                                </div>
-                                <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border transition ${
-                                  isSelected
-                                    ? 'border-emerald-600 bg-emerald-600 text-white'
-                                    : 'border-slate-300 bg-white text-transparent'
-                                }`}>
-                                  <Check size={12} />
-                                </div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <div className="rounded-[20px] border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                          No additional users are available for sharing.
-                        </div>
-                      )}
                     </div>
 
-                    <div className="overflow-hidden rounded-[22px] border border-slate-200 bg-white shadow-sm">
-                      <div className="hidden grid-cols-[minmax(220px,1fr)_minmax(320px,1.2fr)_220px_minmax(250px,1fr)] border-b border-slate-200 bg-slate-50 text-sm font-semibold text-slate-700 lg:grid">
-                        <div className="px-4 py-3">User</div>
-                        <div className="px-4 py-3">Lead Status</div>
-                        <div className="px-4 py-3">Date Range</div>
-                        <div className="px-4 py-3">Brand Access</div>
+                    {selectedSourceUserIds.length === 0 ? (
+                      <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                        Select one or more source users in the table below to enable viewer access.
                       </div>
+                    ) : filteredTargetUsers.length > 0 ? (
+                      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                        {filteredTargetUsers.map((entry) => {
+                          const isSelected = selectedTargetEmployeeIds.includes(Number(entry.id));
+                          return (
+                            <button
+                              key={entry.id}
+                              type="button"
+                              onClick={() => toggleTargetEmployeeSelection(Number(entry.id))}
+                              className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-left transition ${
+                                isSelected
+                                  ? 'border-emerald-300 bg-emerald-50/70 ring-2 ring-emerald-500/10'
+                                  : 'border-slate-200 bg-white hover:border-slate-300'
+                              }`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-semibold leading-tight text-slate-800">{entry.username}</p>
+                                <p className="truncate text-[11px] leading-tight text-slate-500">{entry.email}</p>
+                              </div>
+                              <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border transition ${
+                                isSelected
+                                  ? 'border-emerald-600 bg-emerald-600 text-white'
+                                  : 'border-slate-300 bg-white text-transparent'
+                              }`}>
+                                <Check size={12} />
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                        No additional users are available for sharing.
+                      </div>
+                    )}
+                  </div>
 
-                      {selectedSourceUsers.map((entry, index) => {
+                  <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="hidden grid-cols-[72px_minmax(220px,1fr)_minmax(320px,1.2fr)_220px] border-b border-slate-200 bg-slate-50 text-sm font-semibold text-slate-700 lg:grid">
+                      <div className="px-4 py-2.5">Share</div>
+                      <div className="px-4 py-2.5">User</div>
+                      <div className="px-4 py-2.5">Lead Status</div>
+                      <div className="px-4 py-2.5">Date Range</div>
+                    </div>
+
+                    {filteredSourceUsers.length === 0 ? (
+                      <div className="px-5 py-8 text-center text-sm text-slate-500">
+                        No users match your search.
+                      </div>
+                    ) : (
+                      filteredSourceUsers.map((entry, index) => {
                         const rule = getShareRule(Number(entry.id));
+                        const isSelected = selectedSourceUserIds.includes(Number(entry.id));
                         const initial = String(entry.username ?? '?').trim().charAt(0).toUpperCase() || '?';
                         return (
                           <div
                             key={entry.id}
-                            className={`grid gap-3 px-4 py-3 lg:grid-cols-[minmax(220px,1fr)_minmax(320px,1.2fr)_220px_minmax(250px,1fr)] lg:items-center ${
+                            className={`grid gap-2.5 px-4 py-2.5 lg:grid-cols-[72px_minmax(220px,1fr)_minmax(320px,1.2fr)_220px] lg:items-center ${
                               index === 0 ? '' : 'border-t border-slate-200'
                             }`}
                           >
-                            <div className="flex items-center gap-3">
-                              <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${
-                                entry.role_type === 'admin'
-                                  ? 'bg-gradient-to-br from-emerald-500 to-teal-600'
-                                  : 'bg-gradient-to-br from-indigo-500 to-violet-600'
-                              }`}>
-                                {initial}
-                              </div>
+                            <div className="flex items-center">
+                              <button
+                                type="button"
+                                onClick={() => loadVisibilityForUser(Number(entry.id))}
+                                className={`flex h-6 w-6 items-center justify-center rounded-sm border transition ${
+                                  isSelected
+                                    ? 'border-indigo-600 bg-indigo-600 text-white'
+                                    : 'border-slate-300 bg-white text-transparent hover:border-slate-400'
+                                }`}
+                                aria-label={`${isSelected ? 'Unshare' : 'Share'} ${entry.username}`}
+                              >
+                                <Check size={12} />
+                              </button>
+                            </div>
+                            <div className="flex items-center gap-2.5">
                               <div className="min-w-0">
-                                <p className="truncate text-[15px] font-semibold text-slate-800">{entry.username}</p>
-                                <p className="truncate text-[12px] text-slate-500">{entry.email}</p>
+                                <p className="truncate text-sm font-semibold text-slate-800">{entry.username}</p>
+                                <p className="truncate text-[11px] text-slate-500">{entry.email}</p>
                               </div>
                             </div>
 
                             <div>
                               <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-400 lg:hidden">Lead Status</p>
-                              <div className="flex flex-wrap gap-2">
-                                {[
-                                  { value: 'all', label: 'All Leads' },
-                                  { value: 'paid', label: 'Paid' },
-                                  { value: 'unpaid', label: 'Unpaid' },
-                                ].map((option) => (
-                                  <button
-                                    key={option.value}
-                                    type="button"
-                                    onClick={() => updateShareRule(Number(entry.id), { leadStatusFilter: option.value as ShareLeadStatusFilter })}
-                                    className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                                      rule.leadStatusFilter === option.value
-                                        ? 'border-indigo-600 bg-indigo-600 text-white shadow-sm shadow-indigo-500/20'
-                                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                                    }`}
-                                  >
+                              <select
+                                value={rule.leadStatusFilter}
+                                onChange={(event) => updateShareRule(Number(entry.id), { leadStatusFilter: event.target.value as ShareLeadStatusFilter })}
+                                disabled={!isSelected}
+                                className="w-auto min-w-0 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
+                              >
+                                {SHARE_LEAD_STATUS_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>
                                     {option.label}
-                                  </button>
+                                  </option>
                                 ))}
-                              </div>
+                              </select>
                             </div>
 
                             <div>
@@ -1415,7 +1372,8 @@ export default function LeadsPage({ userId }: { userId?: string }) {
                               <select
                                 value={rule.dateFilter}
                                 onChange={(event) => updateShareRule(Number(entry.id), { dateFilter: event.target.value as LeadDateFilterValue })}
-                                className="rounded-2xl border border-slate-200 bg-white px-2 py-3 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
+                                disabled={!isSelected}
+                                className="w-auto min-w-0 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
                               >
                                 {LEAD_DATE_FILTERS.map((option) => (
                                   <option key={option.value} value={option.value}>
@@ -1425,45 +1383,22 @@ export default function LeadsPage({ userId }: { userId?: string }) {
                               </select>
                             </div>
 
-                            <div>
-                              <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-400 lg:hidden">Brand Access</p>
-                              <div className="flex flex-wrap gap-2">
-                                {SHARE_BRAND_FILTER_OPTIONS.map((option) => (
-                                  <button
-                                    key={option.value}
-                                    type="button"
-                                    onClick={() => updateShareRule(Number(entry.id), { brandFilter: option.value })}
-                                    className={`rounded-xl border px-4 py-2 text-sm font-semibold transition ${
-                                      rule.brandFilter === option.value
-                                        ? 'border-indigo-500 bg-indigo-50 text-indigo-600 shadow-sm'
-                                        : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                                    }`}
-                                  >
-                                    {option.label}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
                           </div>
                         );
-                      })}
-                    </div>
+                      })
+                    )}
                   </div>
-                ) : (
-                  <div className="rounded-[24px] border border-dashed border-slate-300 bg-slate-50 px-5 py-12 text-center text-sm text-slate-500">
-                    Choose one or more users above to set sharing rules and filters.
-                  </div>
-                )}
+                </div>
               </div>
             </div>
 
-            <div className="flex flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:px-8 sm:py-5 lg:flex-row lg:items-center lg:justify-between">
-              <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:justify-end">
+            <div className="flex flex-col gap-2.5 border-t border-slate-200 bg-white px-5 py-3 sm:px-8 sm:py-4 lg:flex-row lg:items-center lg:justify-end">
+              <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:justify-end lg:ml-auto">
                 <button
                   type="button"
                   onClick={clearVisibilitySettings}
                   disabled={visibilityLoading || selectedSourceUserIds.length === 0}
-                  className="rounded-2xl border border-rose-200 bg-rose-50 px-5 py-3 text-sm font-semibold text-rose-600 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 sm:min-w-[170px]"
+                  className="rounded-md border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm font-semibold text-rose-600 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60 sm:min-w-[170px]"
                 >
                   Remove All Access
                 </button>
@@ -1471,7 +1406,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
                   type="button"
                   onClick={closeVisibilityModal}
                   disabled={visibilityLoading}
-                  className="rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 sm:min-w-[120px]"
+                  className="rounded-md border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 sm:min-w-[120px]"
                 >
                   Cancel
                 </button>
@@ -1479,7 +1414,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
                   type="button"
                   onClick={saveVisibilitySettings}
                   disabled={visibilityLoading || selectedSourceUserIds.length === 0}
-                  className="rounded-2xl bg-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-500/20 transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60 sm:min-w-[150px]"
+                  className="rounded-md bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/20 transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60 sm:min-w-[150px]"
                 >
                   {visibilityLoading ? 'Saving...' : 'Save Sharing'}
                 </button>
@@ -1497,14 +1432,20 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         onCancel={() => !deleteLoading && setLeadPendingDelete(null)}
         loading={deleteLoading}
       />
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
         <div>
           <h2 className="text-2xl font-bold text-slate-700 tracking-tight">
             {userId ? 'User Leads' : isAdmin ? 'Global Leads Database' : 'My Leads'}
           </h2>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="min-w-0 flex-1 px-2 text-right text-sm text-slate-700">
+          <span className="block truncate">
+            {selectedCellPreview}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 xl:justify-end">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-600 transition-colors" size={18} />
             <input
@@ -1528,7 +1469,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
           <button
             type="button"
             onClick={handleAddDateClick}
-            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 shadow-sm transition-all hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 shadow-sm transition-all hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
             <CalendarPlus size={18} className="text-slate-500" />
             <span>Add Date</span>
@@ -1570,7 +1511,12 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             cellSelection={{
               suppressMultiRanges: true,
             }}
-            onCellValueChanged={onCellValueChanged}
+            onCellClicked={updateSelectedCellPreview}
+            onCellFocused={updateSelectedCellPreview}
+            onCellValueChanged={(event) => {
+              updateSelectedCellPreview(event);
+              void onCellValueChanged(event);
+            }}
             onRowDragEnd={handleRowDragEnd}
             onColumnMoved={(event: ColumnMovedEvent) => {
               if (!event.finished) return;

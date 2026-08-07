@@ -14,7 +14,6 @@ const ALLOWED_SHARE_DATE_FILTERS = new Set([
   'thisYear',
   'lastYear',
 ]);
-const ALLOWED_SHARE_BRAND_FILTERS = new Set(['all', 'designSpartans', 'uslaw']);
 
 // Get all users (Admin only)
 router.get('/', authenticate, async (req, res) => {
@@ -46,7 +45,7 @@ router.get('/:id/employee-visibility', authenticate, async (req, res) => {
 
   try {
     const [rows] = await db.execute(
-      'SELECT employee_id, lead_status_filter, date_filter, brand_filter FROM user_employee_visibility WHERE user_id = ? ORDER BY employee_id ASC',
+      'SELECT employee_id, lead_status_filter, date_filter FROM user_employee_visibility WHERE user_id = ? ORDER BY employee_id ASC',
       [req.params.id],
     );
 
@@ -54,7 +53,6 @@ router.get('/:id/employee-visibility', authenticate, async (req, res) => {
       employeeIds: rows.map((row) => Number(row.employee_id)),
       leadStatusFilter: rows[0]?.lead_status_filter || 'all',
       dateFilter: rows[0]?.date_filter || 'all',
-      brandFilter: rows[0]?.brand_filter || 'all',
     });
   } catch (err) {
     console.error(err);
@@ -76,9 +74,6 @@ router.put('/:id/employee-visibility', authenticate, async (req, res) => {
   const dateFilter = ALLOWED_SHARE_DATE_FILTERS.has(String(req.body?.dateFilter))
     ? String(req.body.dateFilter)
     : 'all';
-  const brandFilter = ALLOWED_SHARE_BRAND_FILTERS.has(String(req.body?.brandFilter))
-    ? String(req.body.brandFilter)
-    : 'all';
 
   const connection = await db.getConnection();
 
@@ -90,10 +85,10 @@ router.put('/:id/employee-visibility', authenticate, async (req, res) => {
     );
 
     if (employeeIds.length > 0) {
-      const placeholdersWithFilters = employeeIds.map(() => '(?, ?, ?, ?, ?)').join(', ');
-      const values = employeeIds.flatMap((employeeId) => [req.params.id, employeeId, leadStatusFilter, dateFilter, brandFilter]);
+      const placeholdersWithFilters = employeeIds.map(() => '(?, ?, ?, ?)').join(', ');
+      const values = employeeIds.flatMap((employeeId) => [req.params.id, employeeId, leadStatusFilter, dateFilter]);
       await connection.execute(
-        `INSERT INTO user_employee_visibility (user_id, employee_id, lead_status_filter, date_filter, brand_filter) VALUES ${placeholdersWithFilters}`,
+        `INSERT INTO user_employee_visibility (user_id, employee_id, lead_status_filter, date_filter) VALUES ${placeholdersWithFilters}`,
         values,
       );
     }

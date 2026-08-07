@@ -1,7 +1,9 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import type {
+  CellClickedEvent,
   ColDef,
+  CellFocusedEvent,
   CellValueChangedEvent,
   ColumnMovedEvent,
   ColumnResizedEvent,
@@ -24,7 +26,6 @@ import LeadDateFilter from '../../components/LeadDateFilter';
 import { formatRowTimestampTooltip } from '../../utils/date';
 import { filterLeadsByDate, type LeadDateFilter as LeadDateFilterValue } from '../../utils/leadDateFilter';
 import {
-  createCustomColumnId,
   loadCustomColumnValues,
   pickCustomColumnValues,
   saveCustomColumnValues,
@@ -33,9 +34,36 @@ import {
 } from '../../utils/customColumns';
 import { handleGridCellCopy } from '../../utils/gridClipboard';
 import { normalizeUsPhoneForStorage } from '../../utils/phone';
-import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../../utils/columnLayout';
+import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, type StoredColumnLayout } from '../../utils/columnLayout';
 
 ModuleRegistry.registerModules([AllEnterpriseModule]);
+
+const formatSelectedCellPreview = (value: unknown) => {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value instanceof Date) return value.toLocaleString();
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+};
+
+const hasCellValue = (
+  event: CellFocusedEvent | CellValueChangedEvent | CellClickedEvent,
+): event is CellValueChangedEvent | CellClickedEvent => 'value' in event;
+
+const getPreviewValueFromRow = (rowData: Record<string, unknown> | undefined, column: ColDef) => {
+  if (!rowData) return '';
+
+  const fieldKey = typeof column.field === 'string' ? column.field : undefined;
+  const colIdKey = typeof column.colId === 'string' ? column.colId : undefined;
+  const key = fieldKey ?? colIdKey;
+
+  return key ? rowData[key] : '';
+};
 
 type GridLead = Lead & { __isDraft?: boolean; [key: string]: unknown };
 
@@ -46,8 +74,10 @@ const glassTheme = themeQuartz.withParams({
   headerFontWeight: 'bold',
   textColor: 'oklch(44.6% 0.043 257.281)', // slate-600
   fontSize: '12px',
-  headerHeight: 44,
-  rowHeight: 40,
+  headerHeight: 34,
+  rowHeight: 28,
+  cellHorizontalPaddingScale: 0.45,
+  headerColumnBorder: true,
 });
 
 const StatusBadge = (params: ICellRendererParams) => {
@@ -90,6 +120,7 @@ const dividerStyle = {
   borderRight: '1px solid rgba(148, 163, 184, 0.45)',
 };
 const RESIZE_MIN_WIDTH = 56;
+const LEGACY_SHARED_LAYOUT_KEYS = ['crm:admin-leads', 'crm:employee-leads'];
 
 const areStringArraysEqual = (left: string[], right: string[]) =>
   left.length === right.length && left.every((value, index) => value === right[index]);
@@ -115,6 +146,7 @@ export default function MyLeadsPage({
   const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState('');
+  const [selectedCellPreview, setSelectedCellPreview] = useState('');
   const [dateFilter, setDateFilter] = useState<LeadDateFilterValue>('all');
   const [draftRow, setDraftRow] = useState<GridLead>(createEmptyLead);
   const [leadPendingDelete, setLeadPendingDelete] = useState<number | string | null>(null);
@@ -125,6 +157,7 @@ export default function MyLeadsPage({
   const [customColumns, setCustomColumns] = useState<CustomColumnDefinition[]>([]);
   const [customColumnValues, setCustomColumnValues] = useState<CustomColumnValues>(() => loadCustomColumnValues(customValuesStorageKey));
   const [layoutReady, setLayoutReady] = useState(false);
+  const [layoutHydrated, setLayoutHydrated] = useState(false);
 
   const user = useMemo(() => {
     const userStr = localStorage.getItem('user');
@@ -146,9 +179,51 @@ export default function MyLeadsPage({
     }
   }, [user, userIdOverride]);
 
+  const applyStoredLayout = useCallback((stored: StoredColumnLayout | null) => {
+    setOrderedColumnIds(stored?.order ?? []);
+    setVisibleColumnIds(stored?.visible ?? []);
+    setColumnWidths(stored?.widths ?? {});
+    setCustomColumns(stored?.customColumns ?? []);
+  }, []);
+
+  const fetchSharedLayout = useCallback(async () => {
+    setLayoutReady(false);
+
+    try {
+      const response = await apiClient.get('/leads/layout');
+      const remoteLayout = response.data as StoredColumnLayout | null;
+
+      if (remoteLayout) {
+        applyStoredLayout(remoteLayout);
+      } else {
+        const fallbackLayout = loadColumnLayout(layoutStorageKey)
+          ?? LEGACY_SHARED_LAYOUT_KEYS
+            .filter((key) => key !== layoutStorageKey)
+            .map((key) => loadColumnLayout(key))
+            .find(Boolean)
+          ?? null;
+
+        applyStoredLayout(fallbackLayout);
+      }
+    } catch (error) {
+      console.error('Failed to fetch shared layout:', error);
+      const fallbackLayout = loadColumnLayout(layoutStorageKey)
+        ?? LEGACY_SHARED_LAYOUT_KEYS
+          .filter((key) => key !== layoutStorageKey)
+          .map((key) => loadColumnLayout(key))
+          .find(Boolean)
+        ?? null;
+      applyStoredLayout(fallbackLayout);
+    } finally {
+      setLayoutReady(true);
+      setLayoutHydrated(true);
+    }
+  }, [applyStoredLayout, layoutStorageKey]);
+
   useEffect(() => {
     fetchData();
-  }, [fetchData]);
+    fetchSharedLayout();
+  }, [fetchData, fetchSharedLayout]);
 
   const currencyFormatter = (params: ValueFormatterParams) => {
     if (params.value == null) return '$0';
@@ -179,26 +254,38 @@ export default function MyLeadsPage({
       {
         field: 'contact',
         headerName: 'Contact',
-        minWidth: 150,
+        minWidth: 112,
         editable: true,
       },
-      { field: 'email', headerName: 'Email', minWidth: 120, editable: true },
-      { field: 'business_name', headerName: 'Business Name', minWidth: 150, editable: true },
-      { field: 'source', headerName: 'Source', minWidth: 120, editable: true },
-      { field: 'service', headerName: 'Service', minWidth: 120, editable: true, filter: true },
+      { field: 'email', headerName: 'Email', minWidth: 118, editable: true },
+      { field: 'business_owner', headerName: 'Business Owner', minWidth: 118, editable: true },
+      { field: 'business_name', headerName: 'Business Name', minWidth: 118, editable: true },
+      { field: 'source', headerName: 'Source', minWidth: 100, editable: true, filter: true },
+      { field: 'service', headerName: 'Service', minWidth: 92, editable: true, filter: true },
       {
         field: 'notes',
         headerName: 'Notes',
-        minWidth: 250,
+        minWidth: 180,
         editable: true,
+        valueParser: (params) => String(params.newValue ?? ''),
+        valueSetter: (params) => {
+          if (!params.data) return false;
+
+          const nextValue = String(params.newValue ?? '');
+          const previousValue = String((params.data as GridLead).notes ?? '');
+          if (previousValue === nextValue) return false;
+
+          (params.data as GridLead).notes = nextValue;
+          return true;
+        },
         cellEditor: 'agLargeTextCellEditor',
         cellEditorPopup: true,
         cellClass: 'italic text-slate-500'
       },
       {
         field: 'lead_value',
-        headerName: 'Value',
-        minWidth: 180,
+        headerName: 'Lead Value',
+        minWidth: 102,
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
@@ -206,9 +293,16 @@ export default function MyLeadsPage({
         cellStyle: { textAlign: 'right', paddingLeft: '6px', paddingRight: '6px' },
       },
       {
+        field: 'lead',
+        headerName: 'Agent',
+        minWidth: 92,
+        editable: true,
+        filter: true,
+      },
+      {
         field: 'lead_status',
         headerName: 'Status',
-        minWidth: 180,
+        minWidth: 104,
         editable: true,
         cellRenderer: StatusBadge,
         cellEditor: 'agTextCellEditor',
@@ -261,16 +355,8 @@ export default function MyLeadsPage({
   );
 
   useEffect(() => {
-    setLayoutReady(false);
-    const stored = loadColumnLayout(layoutStorageKey);
-
-    setOrderedColumnIds(stored?.order ?? []);
-    setVisibleColumnIds(stored?.visible ?? []);
-    setColumnWidths(stored?.widths ?? {});
-    setCustomColumns(stored?.customColumns ?? []);
     setCustomColumnValues(loadCustomColumnValues(customValuesStorageKey));
-    setLayoutReady(true);
-  }, [customValuesStorageKey, layoutStorageKey]);
+  }, [customValuesStorageKey]);
 
   useEffect(() => {
     if (!layoutReady) return;
@@ -310,14 +396,21 @@ export default function MyLeadsPage({
   }, [columnDefs, columnWidths, orderedColumnIds, visibleColumnIds]);
 
   useEffect(() => {
-    if (!layoutReady || orderedColumnIds.length === 0) return;
-    saveColumnLayout(layoutStorageKey, {
-      order: orderedColumnIds,
-      visible: visibleColumnIds,
-      widths: columnWidths,
-      customColumns,
-    });
-  }, [columnWidths, customColumns, layoutReady, layoutStorageKey, orderedColumnIds, visibleColumnIds]);
+    if (!layoutReady || !layoutHydrated || orderedColumnIds.length === 0) return;
+
+    const timeoutId = window.setTimeout(() => {
+      void apiClient.put('/leads/layout', {
+        order: orderedColumnIds,
+        visible: visibleColumnIds,
+        widths: columnWidths,
+        customColumns,
+      }).catch((error) => {
+        console.error('Failed to save shared layout:', error);
+      });
+    }, 400);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [columnWidths, customColumns, layoutHydrated, layoutReady, orderedColumnIds, visibleColumnIds]);
 
   useEffect(() => {
     saveCustomColumnValues(customValuesStorageKey, customColumnValues);
@@ -409,6 +502,11 @@ export default function MyLeadsPage({
     }
 
     Object.assign(data, withNormalizedLead({ ...data, [field]: nextValue }));
+    setRowData((prev) => prev.map((row) => (
+      row.id === data.id
+        ? withNormalizedLead({ ...row, [field]: nextValue })
+        : row
+    )));
     event.api.refreshCells({ rowNodes: [node] });
 
     try {
@@ -431,50 +529,37 @@ export default function MyLeadsPage({
   }, [customColumnValues, dateFilter, rowData]);
   const pinnedBottomRowData = useMemo(() => [draftRow], [draftRow]);
 
-  const handleAddCustomColumn = useCallback((label: string) => {
-    const trimmedLabel = label.trim();
-    if (!trimmedLabel) return;
+  const updateSelectedCellPreview = useCallback((event: CellFocusedEvent | CellValueChangedEvent | CellClickedEvent) => {
+    if (hasCellValue(event)) {
+      setSelectedCellPreview(formatSelectedCellPreview(event.value));
+      return;
+    }
 
-    const normalizedLabel = trimmedLabel.toLowerCase();
-    const labelExists = columnVisibilityOptions.some((column) => column.label.toLowerCase() === normalizedLabel);
-    if (labelExists) return;
+    const focusedCell = event.api.getFocusedCell();
+    const column = focusedCell?.column ?? event.column;
+    const rowIndex = focusedCell?.rowIndex ?? event.rowIndex;
+    const rowPinned = focusedCell?.rowPinned ?? event.rowPinned;
 
-    const customColumn = {
-      id: createCustomColumnId(trimmedLabel),
-      label: trimmedLabel,
-    };
+    if (!column || rowIndex == null) {
+      setSelectedCellPreview('');
+      return;
+    }
 
-    setCustomColumns((current) => [...current, customColumn]);
-    setOrderedColumnIds((current) => {
-      const nextIds = current.filter((id) => id !== 'actions');
-      return [...nextIds, customColumn.id, 'actions'];
-    });
-    setVisibleColumnIds((current) => [...current, customColumn.id]);
-  }, [columnVisibilityOptions]);
+    if (rowPinned) {
+      setSelectedCellPreview('');
+      return;
+    }
 
-  const handleDeleteCustomColumn = useCallback((columnId: string) => {
-    setCustomColumns((current) => current.filter((column) => column.id !== columnId));
-    setOrderedColumnIds((current) => current.filter((id) => id !== columnId));
-    setVisibleColumnIds((current) => current.filter((id) => id !== columnId));
-    setColumnWidths((current) => {
-      const next = { ...current };
-      delete next[columnId];
-      return next;
-    });
-    setCustomColumnValues((current) => (
-      Object.fromEntries(
-        Object.entries(current).map(([rowId, values]) => {
-          const nextValues = { ...values };
-          delete nextValues[columnId];
-          return [rowId, nextValues];
-        }),
-      )
-    ));
-    setDraftRow((current) => {
-      const next = { ...current };
-      delete next[columnId];
-      return next;
-    });
+    const rowNode = event.api.getDisplayedRowAtIndex(rowIndex);
+    if (!rowNode) {
+      setSelectedCellPreview('');
+      return;
+    }
+
+    const columnDefinition = typeof column === 'string' ? { field: column } : column.getColDef();
+    setSelectedCellPreview(
+      formatSelectedCellPreview(getPreviewValueFromRow(rowNode.data as Record<string, unknown> | undefined, columnDefinition)),
+    );
   }, []);
 
   const getRowStyle = useCallback((params: RowClassParams<GridLead>) => {
@@ -498,26 +583,18 @@ export default function MyLeadsPage({
         onCancel={() => !deleteLoading && setLeadPendingDelete(null)}
         loading={deleteLoading}
       />
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
         <div>
           <h2 className="text-2xl font-bold text-slate-700 tracking-tight">{title}</h2>
         </div>
 
-        <div className="flex items-center gap-3">
-          <ColumnVisibilityMenu
-            columns={columnVisibilityOptions}
-            visibleColumnIds={visibleColumnIds}
-            onAddColumn={handleAddCustomColumn}
-            onDeleteColumn={handleDeleteCustomColumn}
-            onToggle={(columnId) => {
-              setVisibleColumnIds((current) =>
-                current.includes(columnId)
-                  ? current.filter((id) => id !== columnId)
-                  : [...current, columnId]
-              );
-            }}
-          />
-          <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
+        <div className="min-w-0 flex-1 px-2 text-right text-sm text-slate-700">
+          <span className="block truncate">
+            {selectedCellPreview}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 xl:justify-end">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-600" size={18} />
             <input
@@ -528,6 +605,18 @@ export default function MyLeadsPage({
               onChange={(e) => setSearchText(e.target.value)}
             />
           </div>
+          <ColumnVisibilityMenu
+            columns={columnVisibilityOptions}
+            visibleColumnIds={visibleColumnIds}
+            onToggle={(columnId) => {
+              setVisibleColumnIds((current) =>
+                current.includes(columnId)
+                  ? current.filter((id) => id !== columnId)
+                  : [...current, columnId]
+              );
+            }}
+          />
+          <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
         </div>
       </div>
 
@@ -548,7 +637,12 @@ export default function MyLeadsPage({
           cellSelection={{
             suppressMultiRanges: true,
           }}
-          onCellValueChanged={onCellValueChanged}
+          onCellClicked={updateSelectedCellPreview}
+          onCellFocused={updateSelectedCellPreview}
+          onCellValueChanged={(event) => {
+            updateSelectedCellPreview(event);
+            void onCellValueChanged(event);
+          }}
           onColumnMoved={(event: ColumnMovedEvent) => {
             if (!event.finished) return;
 
@@ -583,8 +677,11 @@ export default function MyLeadsPage({
             filter: false,
             resizable: true,
             suppressHeaderMenuButton: true,
+            cellStyle: { textAlign: 'left', paddingLeft: '6px', paddingRight: '6px' },
             tooltipValueGetter: (params) => formatRowTimestampTooltip(params.data),
           }}
+          rowHeight={28}
+          headerHeight={34}
           animateRows={true}
         />
       </div>
