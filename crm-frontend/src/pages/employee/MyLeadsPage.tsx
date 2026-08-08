@@ -289,7 +289,6 @@ export default function MyLeadsPage({
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'font-mono font-bold',
         cellStyle: { textAlign: 'right', paddingLeft: '6px', paddingRight: '6px' },
       },
       {

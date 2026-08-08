@@ -190,7 +190,6 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-left font-mono font-bold',
       },
       {
         field: 'fee_deduction',
@@ -199,7 +198,6 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-left font-mono font-bold',
       },
       {
         field: 'net_currency',
@@ -208,7 +206,6 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-left font-mono font-bold',
       },
       { field: 'lead', headerName: 'Agent', minWidth: 92, editable: true, filter: true },
       {

@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { AgGridReact } from 'ag-grid-react';
 import type {
   CellClickedEvent,
@@ -19,7 +20,7 @@ import {
 } from 'ag-grid-community';
 import { AllEnterpriseModule } from 'ag-grid-enterprise';
 import apiClient from '../../api/client';
-import { CalendarPlus, Check, GripVertical, Loader2, Search, Trash2, Users, X } from 'lucide-react';
+import { CalendarPlus, Check, ChevronDown, GripVertical, Loader2, Plus, Search, Trash2, Users, X } from 'lucide-react';
 import { Lead, User } from '../../types';
 import ColumnVisibilityMenu, { getColumnVisibilityId } from '../../components/ColumnVisibilityMenu';
 import ConfirmDialog from '../../components/ConfirmDialog';
@@ -50,6 +51,12 @@ type ShareLeadStatusFilter = 'all' | 'paid' | 'unpaid';
 type ShareRule = {
   leadStatusFilter: ShareLeadStatusFilter;
   dateFilter: LeadDateFilterValue;
+};
+type ViewerAccessMenuPosition = {
+  left: number;
+  width: number;
+  top?: number;
+  bottom?: number;
 };
 type DateMarkerRow = GridLead & {
   markerDate: string;
@@ -290,10 +297,13 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const [layoutReady, setLayoutReady] = useState(false);
   const [layoutHydrated, setLayoutHydrated] = useState(false);
   const [visibilityModalOpen, setVisibilityModalOpen] = useState(false);
-  const [visibilitySearch, setVisibilitySearch] = useState('');
   const [selectedSourceUserIds, setSelectedSourceUserIds] = useState<number[]>([]);
-  const [activeVisibilityUserId, setActiveVisibilityUserId] = useState<number | null>(null);
-  const [selectedTargetEmployeeIds, setSelectedTargetEmployeeIds] = useState<number[]>([]);
+  const [removedSourceUserIds, setRemovedSourceUserIds] = useState<number[]>([]);
+  const [sourceUserPickerOpen, setSourceUserPickerOpen] = useState(false);
+  const [sourceUserSearch, setSourceUserSearch] = useState('');
+  const [openViewerAccessUserId, setOpenViewerAccessUserId] = useState<number | null>(null);
+  const [viewerAccessMenuPosition, setViewerAccessMenuPosition] = useState<ViewerAccessMenuPosition | null>(null);
+  const [targetEmployeeIdsByUserId, setTargetEmployeeIdsByUserId] = useState<Record<number, number[]>>({});
   const [shareRulesByUserId, setShareRulesByUserId] = useState<Record<number, ShareRule>>({});
   const [visibilityLoading, setVisibilityLoading] = useState(false);
 
@@ -467,25 +477,61 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     () => usersForVisibility.filter((entry) => entry.role_type === 'employee' && Number(entry.id) !== currentUserId),
     [currentUserId, usersForVisibility],
   );
-  const filteredSourceUsers = useMemo(() => {
-    const query = visibilitySearch.trim().toLowerCase();
-    if (!query) return sourceUsers;
+  const selectedSourceUsers = useMemo(
+    () => sourceUsers.filter((entry) => selectedSourceUserIds.includes(Number(entry.id))),
+    [selectedSourceUserIds, sourceUsers],
+  );
+  const availableSourceUsers = useMemo(() => {
+    const query = sourceUserSearch.trim().toLowerCase();
 
-    return sourceUsers.filter((entry) => (
-      String(entry.username ?? '').toLowerCase().includes(query) ||
-      String(entry.email ?? '').toLowerCase().includes(query)
-    ));
-  }, [sourceUsers, visibilitySearch]);
-  const filteredTargetUsers = useMemo(() => {
-    const query = visibilitySearch.trim().toLowerCase();
-    const baseUsers = targetUsers.filter((entry) => !selectedSourceUserIds.includes(Number(entry.id)));
-    if (!query) return baseUsers;
+    return sourceUsers.filter((entry) => {
+      if (selectedSourceUserIds.includes(Number(entry.id))) return false;
+      if (!query) return true;
 
-    return baseUsers.filter((entry) => (
-      String(entry.username ?? '').toLowerCase().includes(query) ||
-      String(entry.email ?? '').toLowerCase().includes(query)
-    ));
-  }, [selectedSourceUserIds, targetUsers, visibilitySearch]);
+      return (
+        String(entry.username ?? '').toLowerCase().includes(query) ||
+        String(entry.email ?? '').toLowerCase().includes(query)
+      );
+    });
+  }, [selectedSourceUserIds, sourceUserSearch, sourceUsers]);
+  const getViewerAccessOptions = useCallback(
+    (sourceUserId: number) => targetUsers.filter((entry) => Number(entry.id) !== sourceUserId),
+    [targetUsers],
+  );
+
+  useEffect(() => {
+    if (openViewerAccessUserId == null) return undefined;
+
+    const closeViewerAccessMenu = () => {
+      setOpenViewerAccessUserId(null);
+      setViewerAccessMenuPosition(null);
+    };
+
+    window.addEventListener('resize', closeViewerAccessMenu);
+    return () => window.removeEventListener('resize', closeViewerAccessMenu);
+  }, [openViewerAccessUserId]);
+
+  const getSelectedTargetEmployeeIds = useCallback((sourceUserId: number) => (
+    targetEmployeeIdsByUserId[sourceUserId] ?? []
+  ), [targetEmployeeIdsByUserId]);
+
+  const getSelectedTargetEmployeeSummary = useCallback((sourceUserId: number) => {
+    const selectedIds = getSelectedTargetEmployeeIds(sourceUserId);
+    if (selectedIds.length === 0) {
+      return 'No viewers selected';
+    }
+
+    const selectedUsers = selectedIds
+      .map((employeeId) => targetUsers.find((entry) => Number(entry.id) === employeeId))
+      .filter((entry): entry is VisibilityUser => Boolean(entry));
+    const [firstUser, secondUser, ...restUsers] = selectedUsers;
+
+    if (!firstUser) return `${selectedIds.length} selected`;
+    if (!secondUser) return String(firstUser.username ?? '1 selected');
+    if (restUsers.length === 0) return `${firstUser.username}, ${secondUser.username}`;
+
+    return `${firstUser.username}, ${secondUser.username} +${restUsers.length}`;
+  }, [getSelectedTargetEmployeeIds, targetUsers]);
   const getShareRule = useCallback((userId: number): ShareRule => (
     shareRulesByUserId[userId] ?? { leadStatusFilter: 'all', dateFilter: 'all' }
   ), [shareRulesByUserId]);
@@ -582,7 +628,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             ? ''
             : currencyFormatter(params)
         ),
-        cellClass: 'font-mono font-bold',
         cellStyle: { textAlign: 'right', paddingLeft: '6px', paddingRight: '6px' },
       },
       {
@@ -883,41 +928,93 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     }
   }, [canManageEmployeeLead, customColumnIdSet, customColumns, draftRow, employees, fetchData, isAdmin, rowData, userId]);
 
-  const openVisibilityModal = useCallback(() => {
-    setSelectedSourceUserIds([]);
-    setActiveVisibilityUserId(null);
-    setSelectedTargetEmployeeIds([]);
+  const openVisibilityModal = useCallback(async () => {
+    const persistedSourceUserIds = usersForVisibility
+      .filter((entry) => Number(entry.visible_to_employees) === 1 || Number(entry.visible_employee_count ?? 0) > 0)
+      .map((entry) => Number(entry.id));
+
+    setSelectedSourceUserIds(persistedSourceUserIds);
+    setRemovedSourceUserIds([]);
+    setSourceUserPickerOpen(false);
+    setSourceUserSearch('');
+    setOpenViewerAccessUserId(null);
+    setViewerAccessMenuPosition(null);
+    setTargetEmployeeIdsByUserId({});
     setShareRulesByUserId({});
-    setVisibilitySearch('');
     setVisibilityModalOpen(true);
-  }, []);
+
+    if (persistedSourceUserIds.length === 0) return;
+
+    try {
+      setVisibilityLoading(true);
+      const persistedSettings = await Promise.all(
+        persistedSourceUserIds.map(async (sourceUserId) => {
+          const response = await apiClient.get(`/users/${sourceUserId}/employee-visibility`);
+          return { sourceUserId, data: response.data };
+        }),
+      );
+
+      setShareRulesByUserId(Object.fromEntries(
+        persistedSettings.map(({ sourceUserId, data }) => [
+          sourceUserId,
+          {
+            leadStatusFilter: (data?.leadStatusFilter as ShareLeadStatusFilter) || 'all',
+            dateFilter: (data?.dateFilter as LeadDateFilterValue) || 'all',
+          },
+        ]),
+      ));
+      setTargetEmployeeIdsByUserId(Object.fromEntries(
+        persistedSettings.map(({ sourceUserId, data }) => [
+          sourceUserId,
+          Array.isArray(data?.employeeIds) ? data.employeeIds.map(Number) : [],
+        ]),
+      ));
+    } catch (error) {
+      console.error('Failed to load saved sharing settings:', error);
+    } finally {
+      setVisibilityLoading(false);
+    }
+  }, [usersForVisibility]);
 
   const closeVisibilityModal = useCallback(() => {
     if (visibilityLoading) return;
 
     setVisibilityModalOpen(false);
     setSelectedSourceUserIds([]);
-    setActiveVisibilityUserId(null);
-    setSelectedTargetEmployeeIds([]);
+    setRemovedSourceUserIds([]);
+    setSourceUserPickerOpen(false);
+    setSourceUserSearch('');
+    setOpenViewerAccessUserId(null);
+    setViewerAccessMenuPosition(null);
+    setTargetEmployeeIdsByUserId({});
     setShareRulesByUserId({});
-    setVisibilitySearch('');
   }, [visibilityLoading]);
 
   const loadVisibilityForUser = useCallback(async (sourceUserId: number) => {
     if (selectedSourceUserIds.includes(sourceUserId)) {
       const remainingIds = selectedSourceUserIds.filter((id) => id !== sourceUserId);
       setSelectedSourceUserIds(remainingIds);
+      const persistedUser = usersForVisibility.find((entry) => Number(entry.id) === sourceUserId);
+      if (persistedUser && (Number(persistedUser.visible_to_employees) === 1 || Number(persistedUser.visible_employee_count ?? 0) > 0)) {
+        setRemovedSourceUserIds((current) => current.includes(sourceUserId) ? current : [...current, sourceUserId]);
+      }
       setShareRulesByUserId((current) => {
+        const next = { ...current };
+        delete next[sourceUserId];
+        return next;
+      });
+      setTargetEmployeeIdsByUserId((current) => {
         const next = { ...current };
         delete next[sourceUserId];
         return next;
       });
 
       if (remainingIds.length === 0) {
-        setActiveVisibilityUserId(null);
-        setSelectedTargetEmployeeIds([]);
-      } else if (activeVisibilityUserId === sourceUserId) {
-        setActiveVisibilityUserId(remainingIds[0]);
+        setOpenViewerAccessUserId(null);
+        setViewerAccessMenuPosition(null);
+      } else if (openViewerAccessUserId === sourceUserId) {
+        setOpenViewerAccessUserId(null);
+        setViewerAccessMenuPosition(null);
       }
       return;
     }
@@ -926,7 +1023,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       setVisibilityLoading(true);
       const response = await apiClient.get(`/users/${sourceUserId}/employee-visibility`);
       setSelectedSourceUserIds((current) => [...current, sourceUserId]);
-      setActiveVisibilityUserId(sourceUserId);
       setShareRulesByUserId((current) => ({
         ...current,
         [sourceUserId]: {
@@ -934,56 +1030,116 @@ export default function LeadsPage({ userId }: { userId?: string }) {
           dateFilter: (response.data?.dateFilter as LeadDateFilterValue) || 'all',
         },
       }));
-
-      if (selectedSourceUserIds.length === 0) {
-        setSelectedTargetEmployeeIds(Array.isArray(response.data?.employeeIds) ? response.data.employeeIds : []);
-      }
+      setTargetEmployeeIdsByUserId((current) => ({
+        ...current,
+        [sourceUserId]: Array.isArray(response.data?.employeeIds) ? response.data.employeeIds : [],
+      }));
+      setRemovedSourceUserIds((current) => current.filter((id) => id !== sourceUserId));
     } catch (error) {
       console.error('Failed to load visibility settings:', error);
     } finally {
       setVisibilityLoading(false);
     }
-  }, [activeVisibilityUserId, selectedSourceUserIds]);
+  }, [openViewerAccessUserId, selectedSourceUserIds, usersForVisibility]);
 
-  const toggleTargetEmployeeSelection = useCallback((employeeId: number) => {
-    setSelectedTargetEmployeeIds((current) => (
-      current.includes(employeeId)
-        ? current.filter((value) => value !== employeeId)
-        : [...current, employeeId]
-    ));
+  const toggleTargetEmployeeSelection = useCallback((sourceUserId: number, employeeId: number) => {
+    setTargetEmployeeIdsByUserId((current) => {
+      const selectedIds = current[sourceUserId] ?? [];
+      return {
+        ...current,
+        [sourceUserId]: selectedIds.includes(employeeId)
+          ? selectedIds.filter((value) => value !== employeeId)
+          : [...selectedIds, employeeId],
+      };
+    });
   }, []);
 
+  const toggleViewerAccessMenu = useCallback((
+    sourceUserId: number,
+    viewerOptionCount: number,
+    anchor: HTMLButtonElement,
+  ) => {
+    if (openViewerAccessUserId === sourceUserId) {
+      setOpenViewerAccessUserId(null);
+      setViewerAccessMenuPosition(null);
+      return;
+    }
+
+    const viewportPadding = 8;
+    const menuWidth = Math.min(220, window.innerWidth - viewportPadding * 2);
+    const estimatedMenuHeight = Math.min(220, Math.max(64, viewerOptionCount * 55 + 12));
+    const anchorRect = anchor.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - anchorRect.bottom - viewportPadding;
+    const spaceAbove = anchorRect.top - viewportPadding;
+    const opensUpward = spaceBelow < estimatedMenuHeight && spaceAbove > spaceBelow;
+    const left = Math.min(
+      Math.max(viewportPadding, anchorRect.right - menuWidth),
+      window.innerWidth - menuWidth - viewportPadding,
+    );
+
+    setViewerAccessMenuPosition({
+      left,
+      width: menuWidth,
+      ...(opensUpward
+        ? { bottom: window.innerHeight - anchorRect.top + viewportPadding }
+        : { top: anchorRect.bottom + viewportPadding }),
+    });
+    setOpenViewerAccessUserId(sourceUserId);
+  }, [openViewerAccessUserId]);
+
   const saveVisibilitySettings = useCallback(async () => {
-    if (selectedSourceUserIds.length === 0) return;
+    if (selectedSourceUserIds.length === 0 && removedSourceUserIds.length === 0) return;
 
     try {
       setVisibilityLoading(true);
-      await Promise.all(
-        selectedSourceUserIds.map((sourceUserId) => (
+      await Promise.all([
+        ...selectedSourceUserIds.map((sourceUserId) => (
           apiClient.put(`/users/${sourceUserId}/employee-visibility`, {
-            employeeIds: selectedTargetEmployeeIds,
+            employeeIds: targetEmployeeIdsByUserId[sourceUserId] ?? [],
             leadStatusFilter: getShareRule(sourceUserId).leadStatusFilter,
             dateFilter: getShareRule(sourceUserId).dateFilter,
           })
         )),
-      );
-      setUsersForVisibility((current) => current.map((entry) => (
-        selectedSourceUserIds.includes(Number(entry.id))
-          ? { ...entry, visible_employee_count: selectedTargetEmployeeIds.length, visible_to_employees: selectedTargetEmployeeIds.length > 0 }
-          : entry
-      )));
+        ...removedSourceUserIds.map((sourceUserId) => (
+          apiClient.put(`/users/${sourceUserId}/employee-visibility`, {
+            employeeIds: [],
+            leadStatusFilter: 'all',
+            dateFilter: 'all',
+          })
+        )),
+      ]);
+      setUsersForVisibility((current) => current.map((entry) => {
+        const sourceUserId = Number(entry.id);
+
+        if (removedSourceUserIds.includes(sourceUserId)) {
+          return { ...entry, visible_employee_count: 0, visible_to_employees: false };
+        }
+
+        if (selectedSourceUserIds.includes(sourceUserId)) {
+          return {
+              ...entry,
+              visible_employee_count: (targetEmployeeIdsByUserId[sourceUserId] ?? []).length,
+              visible_to_employees: (targetEmployeeIdsByUserId[sourceUserId] ?? []).length > 0,
+            };
+        }
+
+        return entry;
+      }));
       setVisibilityModalOpen(false);
       setSelectedSourceUserIds([]);
-      setActiveVisibilityUserId(null);
-      setSelectedTargetEmployeeIds([]);
+      setRemovedSourceUserIds([]);
+      setSourceUserPickerOpen(false);
+      setSourceUserSearch('');
+      setOpenViewerAccessUserId(null);
+      setViewerAccessMenuPosition(null);
+      setTargetEmployeeIdsByUserId({});
       setShareRulesByUserId({});
-      setVisibilitySearch('');
     } catch (error) {
       console.error('Failed to update visibility settings:', error);
     } finally {
       setVisibilityLoading(false);
     }
-  }, [getShareRule, selectedSourceUserIds, selectedTargetEmployeeIds]);
+  }, [getShareRule, removedSourceUserIds, selectedSourceUserIds, targetEmployeeIdsByUserId]);
 
   const clearVisibilitySettings = useCallback(async () => {
     if (selectedSourceUserIds.length === 0) return;
@@ -999,7 +1155,10 @@ export default function LeadsPage({ userId }: { userId?: string }) {
           })
         )),
       );
-      setSelectedTargetEmployeeIds([]);
+      setTargetEmployeeIdsByUserId((current) => ({
+        ...current,
+        ...Object.fromEntries(selectedSourceUserIds.map((sourceUserId) => [sourceUserId, []])),
+      }));
       setShareRulesByUserId((current) => (
         Object.fromEntries(
           Object.entries(current).map(([userId]) => [
@@ -1033,8 +1192,9 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const applyFirstRuleToAllSelected = useCallback(() => {
     if (selectedSourceUserIds.length < 2) return;
 
-    const referenceUserId = activeVisibilityUserId ?? selectedSourceUserIds[0];
+    const referenceUserId = openViewerAccessUserId ?? selectedSourceUserIds[0];
     const referenceRule = getShareRule(referenceUserId);
+    const referenceEmployeeIds = getSelectedTargetEmployeeIds(referenceUserId);
 
     setShareRulesByUserId((current) => ({
       ...current,
@@ -1045,7 +1205,13 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         ]),
       ),
     }));
-  }, [activeVisibilityUserId, getShareRule, selectedSourceUserIds]);
+    setTargetEmployeeIdsByUserId((current) => ({
+      ...current,
+      ...Object.fromEntries(
+        selectedSourceUserIds.map((userId) => [userId, [...referenceEmployeeIds]]),
+      ),
+    }));
+  }, [getSelectedTargetEmployeeIds, getShareRule, openViewerAccessUserId, selectedSourceUserIds]);
 
   const getRowStyle = (params: RowClassParams<GridLead>) => {
     if (params.node.rowPinned === 'bottom') {
@@ -1199,43 +1365,28 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     <div className="p-2 h-full flex flex-col space-y-2 animate-in fade-in duration-500">
       {isAdmin && visibilityModalOpen && (
         <div className="fixed inset-0 z-[110] overflow-y-auto bg-slate-900/35 p-2 pt-16 backdrop-blur-[2px] sm:p-4 sm:pt-20">
-          <div className="mx-auto flex max-h-[calc(100vh-4.5rem)] w-full max-w-7xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] shadow-2xl sm:max-h-[calc(100vh-6rem)]">
-            <div className="border-b border-slate-200 bg-white/95 px-5 py-4 sm:px-8 sm:py-5">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="mx-auto flex max-h-[calc(100vh-4.5rem)] w-full max-w-[700px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] shadow-2xl sm:max-h-[calc(100vh-6rem)]">
+            <div className="border-b border-slate-200 bg-white/95 px-4 py-4 sm:px-5 sm:py-5">
+              <div className="flex items-center justify-between gap-4">
                 <div className="flex min-w-0 items-start gap-3">
                   <div className="min-w-0">
-                    <h3 className="text-[34px] font-bold leading-none tracking-tight text-slate-900 sm:text-[18px]">Share Leads Between Users</h3>
-                    <p className="mt-1.5 text-sm font-medium text-slate-500">
-                      Choose users and set what they can see on the employee side.
-                    </p>
+                    <h3 className="text-lg font-bold leading-tight tracking-tight text-slate-900">Share Leads Between Users</h3>
                   </div>
                 </div>
 
-                <div className="flex items-start gap-3 lg:w-full lg:max-w-[520px] lg:items-center lg:justify-end">
-                  <div className="relative flex-1">
-                    <Search className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-                    <input
-                      type="text"
-                      value={visibilitySearch}
-                      onChange={(event) => setVisibilitySearch(event.target.value)}
-                      placeholder="Search users..."
-                      className="w-full rounded-md border border-slate-200 bg-white py-3 pl-14 pr-4 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={closeVisibilityModal}
-                    className="rounded-md p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
-                    disabled={visibilityLoading}
-                  >
-                    <X size={22} />
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={closeVisibilityModal}
+                  className="shrink-0 rounded-md p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+                  disabled={visibilityLoading}
+                >
+                  <X size={22} />
+                </button>
               </div>
             </div>
 
             <div className="flex-1 overflow-y-auto">
-              <div className="border-b border-slate-200 px-5 py-3 sm:px-8 sm:py-3">
+              <div className="border-b border-slate-200 px-3 py-3 sm:px-4 sm:py-3">
                 <div className="mb-2 flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
                   <div className="flex items-center gap-3">
                     {selectedSourceUserIds.length > 0 && (
@@ -1257,83 +1408,37 @@ export default function LeadsPage({ userId }: { userId?: string }) {
                 </div>
 
                 <div className="space-y-2.5">
-                  <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-3">
-                    <div className="mb-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <h5 className="text-sm font-bold uppercase tracking-[0.18em] text-slate-400">Viewer Access</h5>
-                        <p className="mt-1 text-sm text-slate-500">Pick which users can view the selected leads.</p>
-                      </div>
+                  <div className="w-full overflow-visible rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="hidden rounded-t-lg border-b border-slate-200 bg-slate-50 px-2 text-sm font-semibold text-slate-700 lg:grid lg:grid-cols-[220px_96px_110px_124px] lg:justify-between">
+                      <div className="py-2.5">User</div>
+                      <div className="py-2.5">Status</div>
+                      <div className="py-2.5">Date Range</div>
+                      <div className="py-2.5">Viewer Access</div>
                     </div>
 
-                    {selectedSourceUserIds.length === 0 ? (
-                      <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-                        Select one or more source users in the table below to enable viewer access.
-                      </div>
-                    ) : filteredTargetUsers.length > 0 ? (
-                      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                        {filteredTargetUsers.map((entry) => {
-                          const isSelected = selectedTargetEmployeeIds.includes(Number(entry.id));
-                          return (
-                            <button
-                              key={entry.id}
-                              type="button"
-                              onClick={() => toggleTargetEmployeeSelection(Number(entry.id))}
-                              className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-left transition ${
-                                isSelected
-                                  ? 'border-emerald-300 bg-emerald-50/70 ring-2 ring-emerald-500/10'
-                                  : 'border-slate-200 bg-white hover:border-slate-300'
-                              }`}
-                            >
-                              <div className="min-w-0 flex-1">
-                                <p className="truncate text-sm font-semibold leading-tight text-slate-800">{entry.username}</p>
-                                <p className="truncate text-[11px] leading-tight text-slate-500">{entry.email}</p>
-                              </div>
-                              <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border transition ${
-                                isSelected
-                                  ? 'border-emerald-600 bg-emerald-600 text-white'
-                                  : 'border-slate-300 bg-white text-transparent'
-                              }`}>
-                                <Check size={12} />
-                              </div>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                        No additional users are available for sharing.
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                    <div className="hidden grid-cols-[72px_minmax(220px,1fr)_minmax(320px,1.2fr)_220px] border-b border-slate-200 bg-slate-50 text-sm font-semibold text-slate-700 lg:grid">
-                      <div className="px-4 py-2.5">Share</div>
-                      <div className="px-4 py-2.5">User</div>
-                      <div className="px-4 py-2.5">Lead Status</div>
-                      <div className="px-4 py-2.5">Date Range</div>
-                    </div>
-
-                    {filteredSourceUsers.length === 0 ? (
+                    {selectedSourceUsers.length === 0 ? (
                       <div className="px-5 py-8 text-center text-sm text-slate-500">
-                        No users match your search.
+                        No users added yet.
                       </div>
                     ) : (
-                      filteredSourceUsers.map((entry, index) => {
+                      selectedSourceUsers.map((entry, index) => {
                         const rule = getShareRule(Number(entry.id));
                         const isSelected = selectedSourceUserIds.includes(Number(entry.id));
-                        const initial = String(entry.username ?? '?').trim().charAt(0).toUpperCase() || '?';
+                        const sourceUserId = Number(entry.id);
+                        const viewerOptions = getViewerAccessOptions(sourceUserId);
+                        const selectedViewerIds = getSelectedTargetEmployeeIds(sourceUserId);
+                        const viewerDropdownOpen = openViewerAccessUserId === sourceUserId;
                         return (
                           <div
                             key={entry.id}
-                            className={`grid gap-2.5 px-4 py-2.5 lg:grid-cols-[72px_minmax(220px,1fr)_minmax(320px,1.2fr)_220px] lg:items-center ${
+                            className={`grid gap-y-1.5 px-2 py-2.5 lg:grid-cols-[220px_96px_110px_124px] lg:justify-between ${
                               index === 0 ? '' : 'border-t border-slate-200'
                             }`}
                           >
-                            <div className="flex items-center">
+                            <div className="flex items-center gap-3">
                               <button
                                 type="button"
-                                onClick={() => loadVisibilityForUser(Number(entry.id))}
+                                onClick={() => loadVisibilityForUser(sourceUserId)}
                                 className={`flex h-6 w-6 items-center justify-center rounded-sm border transition ${
                                   isSelected
                                     ? 'border-indigo-600 bg-indigo-600 text-white'
@@ -1343,8 +1448,6 @@ export default function LeadsPage({ userId }: { userId?: string }) {
                               >
                                 <Check size={12} />
                               </button>
-                            </div>
-                            <div className="flex items-center gap-2.5">
                               <div className="min-w-0">
                                 <p className="truncate text-sm font-semibold text-slate-800">{entry.username}</p>
                                 <p className="truncate text-[11px] text-slate-500">{entry.email}</p>
@@ -1355,9 +1458,9 @@ export default function LeadsPage({ userId }: { userId?: string }) {
                               <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-400 lg:hidden">Lead Status</p>
                               <select
                                 value={rule.leadStatusFilter}
-                                onChange={(event) => updateShareRule(Number(entry.id), { leadStatusFilter: event.target.value as ShareLeadStatusFilter })}
+                                onChange={(event) => updateShareRule(sourceUserId, { leadStatusFilter: event.target.value as ShareLeadStatusFilter })}
                                 disabled={!isSelected}
-                                className="w-auto min-w-0 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
+                                className="w-[100px] rounded-md border border-slate-200 bg-white px-1 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
                               >
                                 {SHARE_LEAD_STATUS_OPTIONS.map((option) => (
                                   <option key={option.value} value={option.value}>
@@ -1371,9 +1474,9 @@ export default function LeadsPage({ userId }: { userId?: string }) {
                               <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-400 lg:hidden">Date Range</p>
                               <select
                                 value={rule.dateFilter}
-                                onChange={(event) => updateShareRule(Number(entry.id), { dateFilter: event.target.value as LeadDateFilterValue })}
+                                onChange={(event) => updateShareRule(sourceUserId, { dateFilter: event.target.value as LeadDateFilterValue })}
                                 disabled={!isSelected}
-                                className="w-auto min-w-0 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
+                                className="w-[90px] rounded-md border border-slate-200 bg-white px-1 py-2 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
                               >
                                 {LEAD_DATE_FILTERS.map((option) => (
                                   <option key={option.value} value={option.value}>
@@ -1383,16 +1486,137 @@ export default function LeadsPage({ userId }: { userId?: string }) {
                               </select>
                             </div>
 
+                            <div className="relative">
+                              <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-400 lg:hidden">Viewer Access</p>
+                              <div className="ml-auto w-[124px] rounded-md border border-slate-200 bg-white">
+                                <button
+                                  type="button"
+                                  onClick={(event) => toggleViewerAccessMenu(sourceUserId, viewerOptions.length, event.currentTarget)}
+                                  disabled={!isSelected}
+                                  className="flex w-full items-center gap-1.5 px-2 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                                >
+                                  <span className="min-w-0 flex-1 truncate">{getSelectedTargetEmployeeSummary(sourceUserId)}</span>
+                                  <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-slate-400">
+                                    {selectedViewerIds.length}
+                                    <ChevronDown size={14} className={`transition-transform ${viewerDropdownOpen ? 'rotate-180' : ''}`} />
+                                  </span>
+                                </button>
+
+                                {viewerDropdownOpen && isSelected && viewerAccessMenuPosition && createPortal(
+                                  <div
+                                    className="fixed z-[200] rounded-md border border-slate-200 bg-white p-1.5 shadow-2xl"
+                                    style={viewerAccessMenuPosition}
+                                  >
+                                    {viewerOptions.length === 0 ? (
+                                      <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-center text-xs text-slate-500">
+                                        No additional users are available for sharing.
+                                      </div>
+                                    ) : (
+                                      <div className="max-h-52 space-y-1 overflow-y-auto pr-1">
+                                        {viewerOptions.map((viewer) => {
+                                          const viewerId = Number(viewer.id);
+                                          const isViewerSelected = selectedViewerIds.includes(viewerId);
+                                          return (
+                                            <button
+                                              key={viewer.id}
+                                              type="button"
+                                              onClick={() => toggleTargetEmployeeSelection(sourceUserId, viewerId)}
+                                              className={`flex w-full items-center rounded-md border px-2 py-1.5 text-left transition ${
+                                                isViewerSelected
+                                                  ? 'border-emerald-300 bg-emerald-50/70'
+                                                  : 'border-slate-200 bg-white hover:border-slate-300'
+                                              }`}
+                                            >
+                                              <div className="min-w-0 flex-1">
+                                                <p className="truncate text-sm font-semibold text-slate-800">{viewer.username}</p>
+                                                <p className="truncate text-[11px] text-slate-500">{viewer.email}</p>
+                                              </div>
+                                              <div className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border transition ${
+                                                isViewerSelected
+                                                  ? 'border-emerald-600 bg-emerald-600 text-white'
+                                                  : 'border-slate-300 bg-white text-transparent'
+                                              }`}>
+                                                <Check size={11} />
+                                              </div>
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>,
+                                  document.body,
+                                )}
+                              </div>
+                            </div>
+
                           </div>
                         );
                       })
                     )}
+
+                    <div className="border-t border-slate-200 p-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSourceUserPickerOpen((current) => !current);
+                          setSourceUserSearch('');
+                        }}
+                        className="flex w-full items-center justify-center gap-2 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600 transition hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600"
+                      >
+                        <Plus size={16} />
+                        Add existing user
+                      </button>
+
+                      {sourceUserPickerOpen && (
+                        <div className="mt-2 rounded-md border border-slate-200 bg-white p-2 shadow-sm">
+                          <div className="relative">
+                            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                            <input
+                              type="search"
+                              value={sourceUserSearch}
+                              onChange={(event) => setSourceUserSearch(event.target.value)}
+                              placeholder="Search existing users..."
+                              className="w-full rounded-md border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 outline-none transition focus:border-indigo-300 focus:ring-2 focus:ring-indigo-500/20"
+                              autoFocus
+                            />
+                          </div>
+
+                          <div className="mt-2 max-h-48 space-y-1 overflow-y-auto pr-1">
+                            {availableSourceUsers.length === 0 ? (
+                              <div className="px-3 py-5 text-center text-sm text-slate-500">
+                                {sourceUsers.length === selectedSourceUsers.length
+                                  ? 'All users have been added.'
+                                  : 'No users match your search.'}
+                              </div>
+                            ) : (
+                              availableSourceUsers.map((entry) => (
+                                <button
+                                  key={entry.id}
+                                  type="button"
+                                  onClick={() => loadVisibilityForUser(Number(entry.id))}
+                                  disabled={visibilityLoading}
+                                  className="flex w-full items-center gap-3 rounded-md border border-slate-200 px-3 py-2 text-left transition hover:border-indigo-300 hover:bg-indigo-50/60 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block truncate text-sm font-semibold text-slate-800">{entry.username}</span>
+                                    <span className="block truncate text-[11px] text-slate-500">{entry.email}</span>
+                                  </span>
+                                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border border-slate-300 bg-white text-transparent">
+                                    <Check size={11} />
+                                  </span>
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="flex flex-col gap-2.5 border-t border-slate-200 bg-white px-5 py-3 sm:px-8 sm:py-4 lg:flex-row lg:items-center lg:justify-end">
+            <div className="flex flex-col gap-2.5 border-t border-slate-200 bg-white px-4 py-3 sm:px-5 sm:py-4 lg:flex-row lg:items-center lg:justify-end">
               <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:justify-end lg:ml-auto">
                 <button
                   type="button"
@@ -1413,7 +1637,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
                 <button
                   type="button"
                   onClick={saveVisibilitySettings}
-                  disabled={visibilityLoading || selectedSourceUserIds.length === 0}
+                  disabled={visibilityLoading || (selectedSourceUserIds.length === 0 && removedSourceUserIds.length === 0)}
                   className="rounded-md bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/20 transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60 sm:min-w-[150px]"
                 >
                   {visibilityLoading ? 'Saving...' : 'Save Sharing'}

@@ -206,7 +206,6 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-left font-mono font-bold',
       },
       {
         field: 'balance',
@@ -215,7 +214,6 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-left font-mono font-bold',
       },
       {
         field: 'total',
@@ -224,7 +222,6 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
         editable: true,
         valueParser: numberParser,
         valueFormatter: currencyFormatter,
-        cellClass: 'text-left font-mono font-bold',
       },
       {
         colId: 'actions',
