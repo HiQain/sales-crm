@@ -1,4 +1,5 @@
 import db from '../config/db.js';
+import { getCompanyId } from '../utils/company.js';
 import { isPhoneBlank, normalizeUsPhoneForStorage } from '../utils/phone.js';
 
 const serializeLead = (lead) => {
@@ -13,6 +14,7 @@ const serializeLead = (lead) => {
 
 const normalizeLeadPayload = (payload) => {
   const normalized = { ...payload };
+  delete normalized.company_id;
 
   if ('contact' in normalized) {
     const formattedPhone = normalizeUsPhoneForStorage(normalized.contact);
@@ -29,10 +31,10 @@ const normalizeLeadPayload = (payload) => {
 
 const isAdmin = (user) => user?.role === 'admin';
 
-const getLeadById = async (id) => {
+const getLeadById = async (id, companyId) => {
   const [rows] = await db.execute(
-    'SELECT id, assigned_user, created_by FROM leads WHERE id = ? LIMIT 1',
-    [id],
+    'SELECT id, assigned_user, created_by FROM leads WHERE id = ? AND company_id = ? LIMIT 1',
+    [id, companyId],
   );
 
   return rows[0] ?? null;
@@ -76,6 +78,7 @@ const attachAssignedUserFromLead = async (payload) => {
 };
 
 const LEADS_LAYOUT_KEY = 'leads:shared';
+const getLeadsLayoutKey = (companyId) => `${LEADS_LAYOUT_KEY}:company:${companyId}`;
 
 const normalizeLayoutPayload = (payload) => {
   if (!payload || typeof payload !== 'object') {
@@ -123,6 +126,14 @@ const buildSharedLeadDateFilterSql = (columnName, filter) => {
     return `${columnName} >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)`;
   }
 
+  if (filter === 'last15Days') {
+    return `${columnName} >= DATE_SUB(CURDATE(), INTERVAL 15 DAY)`;
+  }
+
+  if (filter === 'last30Days') {
+    return `${columnName} >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)`;
+  }
+
   if (filter === 'last3Months') {
     return `${columnName} >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)`;
   }
@@ -152,15 +163,17 @@ const buildSharedLeadDateFilterSql = (columnName, filter) => {
 
 export const getLeads = async (req, res) => {
   const { userId } = req.query;
+  const companyId = getCompanyId(req);
 
   try {
     let query = `SELECT leads.* FROM leads`;
-    let params = [];
-    const whereClauses = ['1=1'];
+    const joinParams = [];
+    const whereClauses = ['leads.company_id = ?'];
+    const whereParams = [companyId];
 
     if (isAdmin(req.user) && userId) {
       whereClauses.push('leads.assigned_user = ?');
-      params.push(userId);
+      whereParams.push(userId);
     } else if (!isAdmin(req.user)) {
       const [sharedRows] = await db.execute(
         'SELECT user_id, lead_status_filter, date_filter FROM user_employee_visibility WHERE employee_id = ? ORDER BY user_id ASC',
@@ -168,7 +181,7 @@ export const getLeads = async (req, res) => {
       );
 
       query += ' LEFT JOIN lead_view_orders lead_view_order ON lead_view_order.lead_id = leads.id AND lead_view_order.user_id = ?';
-      params = [req.user.id, req.user.id];
+      joinParams.push(req.user.id);
 
       const sharedClauses = sharedRows.flatMap((row) => {
         const sharedUserId = Number(row.user_id);
@@ -197,9 +210,10 @@ export const getLeads = async (req, res) => {
 
       if (sharedClauses.length > 0) {
         whereClauses.push(`(leads.assigned_user = ? OR ${sharedClauses.map((entry) => entry.clause).join(' OR ')})`);
-        params.push(...sharedClauses.flatMap((entry) => entry.params));
+        whereParams.push(req.user.id, ...sharedClauses.flatMap((entry) => entry.params));
       } else {
         whereClauses.push('leads.assigned_user = ?');
+        whereParams.push(req.user.id);
       }
     }
 
@@ -211,7 +225,7 @@ export const getLeads = async (req, res) => {
       query += ` ORDER BY COALESCE(lead_view_order.sort_order, 1000000000 + leads.sort_order) ASC, leads.created_at DESC, leads.id DESC`;
     }
 
-    const [leads] = await db.execute(query, params);
+    const [leads] = await db.execute(query, [...joinParams, ...whereParams]);
     res.json(leads.map(serializeLead));
   } catch (err) {
     console.error(err);
@@ -220,6 +234,7 @@ export const getLeads = async (req, res) => {
 };
 
 export const createLead = async (req, res) => {
+  const companyId = getCompanyId(req);
   const normalizedPayload = normalizeLeadPayload(req.body);
 
   if (!normalizedPayload) {
@@ -243,18 +258,19 @@ export const createLead = async (req, res) => {
 
   try {
     const sortOrderQuery = is_date_marker
-      ? 'SELECT COALESCE(MIN(sort_order), 1) AS edgeSortOrder FROM leads'
-      : 'SELECT COALESCE(MAX(sort_order), 0) AS edgeSortOrder FROM leads';
-    const [sortOrderRows] = await db.execute(sortOrderQuery);
+      ? 'SELECT COALESCE(MIN(sort_order), 1) AS edgeSortOrder FROM leads WHERE company_id = ?'
+      : 'SELECT COALESCE(MAX(sort_order), 0) AS edgeSortOrder FROM leads WHERE company_id = ?';
+    const [sortOrderRows] = await db.execute(sortOrderQuery, [companyId]);
     const edgeSortOrder = Number(sortOrderRows[0]?.edgeSortOrder ?? (is_date_marker ? 1 : 0));
     const nextSortOrder = is_date_marker ? edgeSortOrder - 1 : edgeSortOrder + 1;
 
     const [result] = await db.execute(`
       INSERT INTO leads 
-      (contact, email, business_owner, business_name, source, service, notes,
+      (company_id, contact, email, business_owner, business_name, source, service, notes,
        is_date_marker, marker_date, sort_order, lead_value, \`lead\`, lead_status, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
+      companyId,
       contact || '',
       email || '',
       business_owner || '',
@@ -266,13 +282,13 @@ export const createLead = async (req, res) => {
       marker_date || null,
       nextSortOrder,
       lead_value || 0,
-      lead || null,
+      is_date_marker ? null : lead || null,
       lead_status || 'pending',
       Object.prototype.hasOwnProperty.call(payload, 'assigned_user') ? assigned_user ?? null : req.user.id,
       req.user.id
     ]);
-    const [rows] = await db.execute('SELECT * FROM leads WHERE id = ? LIMIT 1', [result.insertId]);
-    res.status(201).json(serializeLead(rows[0] ?? { id: result.insertId, ...payload }));
+    const [rows] = await db.execute('SELECT * FROM leads WHERE id = ? AND company_id = ? LIMIT 1', [result.insertId, companyId]);
+    res.status(201).json(serializeLead(rows[0] ?? { id: result.insertId, company_id: companyId, ...payload }));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to create lead' } });
@@ -281,6 +297,7 @@ export const createLead = async (req, res) => {
 
 export const updateLead = async (req, res) => {
   const { id } = req.params;
+  const companyId = getCompanyId(req);
   const normalizedUpdates = normalizeLeadPayload(req.body);
 
   if (!normalizedUpdates) {
@@ -294,7 +311,7 @@ export const updateLead = async (req, res) => {
   }
 
   try {
-    const lead = await getLeadById(id);
+    const lead = await getLeadById(id, companyId);
     if (!lead) {
       return res.status(404).json({ error: { message: 'Lead not found' } });
     }
@@ -311,9 +328,9 @@ export const updateLead = async (req, res) => {
     }
 
     const setClause = Object.keys(updates).map(key => `\`${key}\` = ?`).join(', ');
-    const values = [...Object.values(updates), id];
+    const values = [...Object.values(updates), id, companyId];
 
-    await db.execute(`UPDATE leads SET ${setClause} WHERE id = ?`, values);
+    await db.execute(`UPDATE leads SET ${setClause} WHERE id = ? AND company_id = ?`, values);
 
     res.json({ message: 'Lead updated successfully' });
   } catch (err) {
@@ -324,8 +341,9 @@ export const updateLead = async (req, res) => {
 
 export const deleteLead = async (req, res) => {
   const { id } = req.params;
+  const companyId = getCompanyId(req);
   try {
-    const lead = await getLeadById(id);
+    const lead = await getLeadById(id, companyId);
     if (!lead) {
       return res.status(404).json({ error: { message: 'Lead not found' } });
     }
@@ -334,7 +352,7 @@ export const deleteLead = async (req, res) => {
       return res.status(403).json({ error: { message: 'Forbidden' } });
     }
 
-    await db.execute('DELETE FROM leads WHERE id = ?', [id]);
+    await db.execute('DELETE FROM leads WHERE id = ? AND company_id = ?', [id, companyId]);
     res.json({ message: 'Lead deleted successfully' });
   } catch (err) {
     res.status(500).json({ error: { message: 'Failed to delete lead' } });
@@ -342,6 +360,7 @@ export const deleteLead = async (req, res) => {
 };
 
 export const reorderLeads = async (req, res) => {
+  const companyId = getCompanyId(req);
   const leadIds = Array.isArray(req.body?.leadIds)
     ? req.body.leadIds.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0)
     : [];
@@ -357,8 +376,8 @@ export const reorderLeads = async (req, res) => {
 
     const placeholders = leadIds.map(() => '?').join(', ');
     const [rows] = await connection.execute(
-      `SELECT id, assigned_user, created_by, sort_order FROM leads WHERE id IN (${placeholders})`,
-      leadIds,
+      `SELECT id, assigned_user, created_by, sort_order FROM leads WHERE company_id = ? AND id IN (${placeholders})`,
+      [companyId, ...leadIds],
     );
 
     if ((rows).length !== leadIds.length) {
@@ -369,8 +388,8 @@ export const reorderLeads = async (req, res) => {
     if (isAdmin(req.user)) {
       for (let index = 0; index < leadIds.length; index += 1) {
         await connection.execute(
-          'UPDATE leads SET sort_order = ? WHERE id = ?',
-          [index + 1, leadIds[index]],
+          'UPDATE leads SET sort_order = ? WHERE id = ? AND company_id = ?',
+          [index + 1, leadIds[index], companyId],
         );
       }
     } else {
@@ -389,10 +408,12 @@ export const reorderLeads = async (req, res) => {
         return res.status(403).json({ error: { message: 'Forbidden' } });
       }
 
-      await connection.execute(
-        'DELETE FROM lead_view_orders WHERE user_id = ?',
-        [req.user.id],
-      );
+      await connection.execute(`
+        DELETE lead_view_order
+        FROM lead_view_orders lead_view_order
+        INNER JOIN leads ON leads.id = lead_view_order.lead_id
+        WHERE lead_view_order.user_id = ? AND leads.company_id = ?
+      `, [req.user.id, companyId]);
 
       for (let index = 0; index < leadIds.length; index += 1) {
         await connection.execute(
@@ -413,12 +434,22 @@ export const reorderLeads = async (req, res) => {
   }
 };
 
-export const getLeadLayout = async (_req, res) => {
+export const getLeadLayout = async (req, res) => {
+  const companyId = getCompanyId(req);
+  const layoutKey = getLeadsLayoutKey(companyId);
+
   try {
-    const [rows] = await db.execute(
+    let [rows] = await db.execute(
       'SELECT layout_json FROM table_layouts WHERE table_key = ? LIMIT 1',
-      [LEADS_LAYOUT_KEY],
+      [layoutKey],
     );
+
+    if (rows.length === 0 && companyId === 1) {
+      [rows] = await db.execute(
+        'SELECT layout_json FROM table_layouts WHERE table_key = ? LIMIT 1',
+        [LEADS_LAYOUT_KEY],
+      );
+    }
 
     if (rows.length === 0) {
       return res.json(null);
@@ -434,6 +465,7 @@ export const getLeadLayout = async (_req, res) => {
 };
 
 export const updateLeadLayout = async (req, res) => {
+  const companyId = getCompanyId(req);
   const layout = normalizeLayoutPayload(req.body);
 
   if (!layout) {
@@ -448,7 +480,7 @@ export const updateLeadLayout = async (req, res) => {
         layout_json = VALUES(layout_json),
         updated_by = VALUES(updated_by)
     `, [
-      LEADS_LAYOUT_KEY,
+      getLeadsLayoutKey(companyId),
       JSON.stringify(layout),
       req.user?.id ?? null,
       req.user?.id ?? null,

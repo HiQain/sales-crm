@@ -1,4 +1,5 @@
 import db from '../config/db.js';
+import { getCompanyId } from '../utils/company.js';
 import { isPhoneBlank, normalizeUsPhoneForStorage } from '../utils/phone.js';
 
 const CLIENT_JOURNEYS_TABLE = 'client_journeys';
@@ -110,10 +111,11 @@ const serializeClientJourney = (record) => ({
 
 export const getSalesRecords = async (req, res) => {
   const { userId } = req.query;
+  const companyId = getCompanyId(req);
 
   try {
-    let query = `SELECT id, lead_id, billing_id, record_date, client_name, business_name, credit_card_info, email, phone, sales, \`lead\`, service, status, paid, balance, total, assigned_user, created_by, created_at, updated_at FROM ${CLIENT_JOURNEYS_TABLE} WHERE 1=1`;
-    const params = [];
+    let query = `SELECT id, company_id, lead_id, billing_id, record_date, client_name, business_name, credit_card_info, email, phone, sales, \`lead\`, service, status, paid, balance, total, assigned_user, created_by, created_at, updated_at FROM ${CLIENT_JOURNEYS_TABLE} WHERE company_id = ?`;
+    const params = [companyId];
 
     if (userId) {
       query += ' AND assigned_user = ?';
@@ -131,6 +133,7 @@ export const getSalesRecords = async (req, res) => {
 };
 
 export const createSalesRecord = async (req, res) => {
+  const companyId = getCompanyId(req);
   const payload = normalizeClientJourneyPayload({
     ...pickSalesRecordFields(req.body),
     assigned_user: req.body.assigned_user || req.user.id,
@@ -143,10 +146,11 @@ export const createSalesRecord = async (req, res) => {
   try {
     const [salesRecordResult] = await db.execute(`
       INSERT INTO ${CLIENT_JOURNEYS_TABLE}
-      (lead_id, billing_id, record_date, client_name, business_name, credit_card_info, email, phone,
+      (company_id, lead_id, billing_id, record_date, client_name, business_name, credit_card_info, email, phone,
        sales, \`lead\`, service, status, paid, balance, total, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
+      companyId,
       null,
       null,
       payload.record_date || null,
@@ -168,6 +172,7 @@ export const createSalesRecord = async (req, res) => {
 
     res.status(201).json({
       id: salesRecordResult.insertId,
+      company_id: companyId,
       lead_id: null,
       billing_id: null,
       ...serializeClientJourney(payload),
@@ -180,6 +185,7 @@ export const createSalesRecord = async (req, res) => {
 
 export const updateSalesRecord = async (req, res) => {
   const { id } = req.params;
+  const companyId = getCompanyId(req);
   const rawUpdates = pickSalesRecordFields(req.body);
 
   if (Object.keys(rawUpdates).length === 0) {
@@ -188,8 +194,8 @@ export const updateSalesRecord = async (req, res) => {
 
   try {
     const [records] = await db.execute(
-      `SELECT total, paid, balance FROM ${CLIENT_JOURNEYS_TABLE} WHERE id = ? LIMIT 1`,
-      [id]
+      `SELECT total, paid, balance FROM ${CLIENT_JOURNEYS_TABLE} WHERE id = ? AND company_id = ? LIMIT 1`,
+      [id, companyId]
     );
 
     if (records.length === 0) {
@@ -204,8 +210,8 @@ export const updateSalesRecord = async (req, res) => {
 
     const setClause = Object.keys(updates).map(key => `${quoteColumn(key)} = ?`).join(', ');
     await db.execute(
-      `UPDATE ${CLIENT_JOURNEYS_TABLE} SET ${setClause} WHERE id = ?`,
-      [...Object.values(updates), id]
+      `UPDATE ${CLIENT_JOURNEYS_TABLE} SET ${setClause} WHERE id = ? AND company_id = ?`,
+      [...Object.values(updates), id, companyId]
     );
     res.json({ message: 'Client journey updated successfully' });
   } catch (err) {
@@ -216,8 +222,12 @@ export const updateSalesRecord = async (req, res) => {
 
 export const deleteSalesRecord = async (req, res) => {
   const { id } = req.params;
+  const companyId = getCompanyId(req);
   try {
-    const [result] = await db.execute(`DELETE FROM ${CLIENT_JOURNEYS_TABLE} WHERE id = ?`, [id]);
+    const [result] = await db.execute(
+      `DELETE FROM ${CLIENT_JOURNEYS_TABLE} WHERE id = ? AND company_id = ?`,
+      [id, companyId],
+    );
     if (result.affectedRows === 0) {
       return res.status(404).json({ error: { message: 'Client journey not found' } });
     }

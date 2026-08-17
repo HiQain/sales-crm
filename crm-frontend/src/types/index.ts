@@ -14,6 +14,12 @@ export interface User {
   visible_employee_count?: number;
   role_name?: string;
   role_type?: string;
+  company_ids?: number[];
+  companies?: Array<{
+    id: number;
+    code: string;
+    name: string;
+  }>;
 }
 
 export type LeadStatus = string;

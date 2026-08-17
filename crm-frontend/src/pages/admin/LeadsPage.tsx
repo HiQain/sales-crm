@@ -36,6 +36,7 @@ import {
   type CustomColumnValues,
 } from '../../utils/customColumns';
 import { handleGridCellCopy } from '../../utils/gridClipboard';
+import { getSelectedCompanyId } from '../../utils/company';
 import { normalizeUsPhoneForStorage } from '../../utils/phone';
 import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, type StoredColumnLayout } from '../../utils/columnLayout';
 
@@ -265,6 +266,7 @@ const formatMarkerDate = (dateValue: string) => {
 };
 
 export default function LeadsPage({ userId }: { userId?: string }) {
+  const companyId = getSelectedCompanyId();
   const user = useMemo(() => {
     const userStr = localStorage.getItem('user');
     return userStr ? JSON.parse(userStr) : null;
@@ -273,11 +275,16 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const isAdmin = userRole === 'admin';
   const currentUserId = Number(user?.id ?? 0);
   const currentUsername = String(user?.username ?? '').trim();
-  const layoutStorageKey = userId
+  const baseLayoutStorageKey = userId
     ? `crm:admin-user-leads:${userId}`
     : isAdmin
       ? 'crm:admin-leads'
       : 'crm:employee-leads';
+  const layoutStorageKey = `${baseLayoutStorageKey}:company:${companyId}`;
+  const legacySharedLayoutKeys = useMemo(
+    () => companyId === 1 ? LEGACY_SHARED_LAYOUT_KEYS : [],
+    [companyId],
+  );
   const customValuesStorageKey = `${layoutStorageKey}:custom-values`;
   const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
@@ -367,7 +374,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         applyStoredLayout(remoteLayout);
       } else {
         const fallbackLayout = loadColumnLayout(layoutStorageKey)
-          ?? LEGACY_SHARED_LAYOUT_KEYS
+          ?? legacySharedLayoutKeys
             .filter((key) => key !== layoutStorageKey)
             .map((key) => loadColumnLayout(key))
             .find(Boolean)
@@ -378,7 +385,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     } catch (error) {
       console.error('Failed to fetch shared layout:', error);
       const fallbackLayout = loadColumnLayout(layoutStorageKey)
-        ?? LEGACY_SHARED_LAYOUT_KEYS
+        ?? legacySharedLayoutKeys
           .filter((key) => key !== layoutStorageKey)
           .map((key) => loadColumnLayout(key))
           .find(Boolean)
@@ -388,7 +395,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       setLayoutReady(true);
       setLayoutHydrated(true);
     }
-  }, [applyStoredLayout, layoutStorageKey]);
+  }, [applyStoredLayout, layoutStorageKey, legacySharedLayoutKeys]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -634,9 +641,12 @@ export default function LeadsPage({ userId }: { userId?: string }) {
         field: 'lead',
         headerName: 'Agent',
         minWidth: 92,
-        editable: isAdmin,
+        editable: (params) => isAdmin && !(params.data as DateMarkerRow | undefined)?.is_date_marker,
         filter: true,
         filterParams: setFilterParams,
+        valueFormatter: (params) => (
+          (params.data as DateMarkerRow | undefined)?.is_date_marker ? '' : params.value
+        ),
         ...(isAdmin
           ? {
               cellEditor: 'agSelectCellEditor',
@@ -1288,7 +1298,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       marker_date: value,
       is_date_marker: true,
       lead_value: 0,
-      lead: currentUsername,
+      lead: '',
       lead_status: 'pending',
       assigned_user: userId ? Number(userId) : currentUserId,
     }).then(() => {
@@ -1296,7 +1306,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
     }).catch((error) => {
       console.error('Create date marker failed:', error);
     });
-  }, [currentUserId, currentUsername, fetchData, userId]);
+  }, [currentUserId, fetchData, userId]);
 
   const handleAddCustomColumn = useCallback((label: string) => {
     const trimmedLabel = label.trim();
@@ -1359,7 +1369,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
       console.error('Row reorder failed:', error);
       fetchData();
     });
-  }, [canManageEmployeeLead, fetchData, isAdmin]);
+  }, [canViewDateMarker, fetchData, isAdmin]);
 
   return (
     <div className="p-2 h-full flex flex-col space-y-2 animate-in fade-in duration-500">

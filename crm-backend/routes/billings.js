@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, authorizeCompanyAccess } from '../middleware/auth.js';
 import {
   createBilling,
   deleteBilling,
@@ -9,9 +9,11 @@ import {
 
 const router = express.Router();
 
-router.get('/', authenticate, getBillings);
-router.post('/', authenticate, createBilling);
-router.put('/:id', authenticate, updateBilling);
-router.delete('/:id', authenticate, deleteBilling);
+router.use(authenticate, authorizeCompanyAccess);
+
+router.get('/', getBillings);
+router.post('/', createBilling);
+router.put('/:id', updateBilling);
+router.delete('/:id', deleteBilling);
 
 export default router;

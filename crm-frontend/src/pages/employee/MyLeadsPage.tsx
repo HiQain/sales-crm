@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
 import type {
   CellClickedEvent,
@@ -7,6 +7,7 @@ import type {
   CellValueChangedEvent,
   ColumnMovedEvent,
   ColumnResizedEvent,
+  RowDragEndEvent,
   RowClassParams,
   ICellRendererParams,
   ValueParserParams,
@@ -18,7 +19,7 @@ import {
 } from 'ag-grid-community';
 import { AllEnterpriseModule } from 'ag-grid-enterprise';
 import apiClient from '../../api/client';
-import { Loader2, Search, Trash2 } from 'lucide-react';
+import { GripVertical, Loader2, Search, Trash2 } from 'lucide-react';
 import { Lead } from '../../types';
 import ColumnVisibilityMenu, { getColumnVisibilityId } from '../../components/ColumnVisibilityMenu';
 import ConfirmDialog from '../../components/ConfirmDialog';
@@ -33,6 +34,7 @@ import {
   type CustomColumnValues,
 } from '../../utils/customColumns';
 import { handleGridCellCopy } from '../../utils/gridClipboard';
+import { getSelectedCompanyId } from '../../utils/company';
 import { normalizeUsPhoneForStorage } from '../../utils/phone';
 import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, type StoredColumnLayout } from '../../utils/columnLayout';
 
@@ -98,6 +100,45 @@ const StatusBadge = (params: ICellRendererParams) => {
   );
 };
 
+const ActionsCellRenderer = (
+  params: ICellRendererParams<GridLead> & {
+    onDelete: (id: number | string) => void;
+  },
+) => {
+  const dragHandleRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!dragHandleRef.current || params.node.rowPinned === 'bottom') return;
+    if (typeof params.registerRowDragger !== 'function') return;
+
+    params.registerRowDragger(dragHandleRef.current, 4);
+  }, [params]);
+
+  if (params.node.rowPinned === 'bottom') {
+    return null;
+  }
+
+  return (
+    <div className="flex h-full items-center justify-center gap-1">
+      <button
+        ref={dragHandleRef}
+        type="button"
+        className="cursor-move p-1 text-slate-400 hover:bg-slate-200/70 hover:text-slate-600 rounded transition-colors"
+        aria-label="Drag row"
+      >
+        <GripVertical size={15} />
+      </button>
+      <button
+        type="button"
+        onClick={() => params.onDelete(params.data.id)}
+        className="p-1 hover:bg-rose-500/20 text-rose-500 rounded transition-colors"
+      >
+        <Trash2 size={16} />
+      </button>
+    </div>
+  );
+};
+
 const createEmptyLead = (): GridLead => ({
   id: -1,
   contact: '',
@@ -141,7 +182,13 @@ export default function MyLeadsPage({
   title = 'My Leads',
   searchPlaceholder = 'Filter my leads...',
 }: MyLeadsPageProps) {
-  const layoutStorageKey = userIdOverride ? `crm:employee-user-leads:${userIdOverride}` : 'crm:employee-leads';
+  const companyId = getSelectedCompanyId();
+  const baseLayoutStorageKey = userIdOverride ? `crm:employee-user-leads:${userIdOverride}` : 'crm:employee-leads';
+  const layoutStorageKey = `${baseLayoutStorageKey}:company:${companyId}`;
+  const legacySharedLayoutKeys = useMemo(
+    () => companyId === 1 ? LEGACY_SHARED_LAYOUT_KEYS : [],
+    [companyId],
+  );
   const customValuesStorageKey = `${layoutStorageKey}:custom-values`;
   const [rowData, setRowData] = useState<GridLead[]>([]);
   const [loading, setLoading] = useState(true);
@@ -197,7 +244,7 @@ export default function MyLeadsPage({
         applyStoredLayout(remoteLayout);
       } else {
         const fallbackLayout = loadColumnLayout(layoutStorageKey)
-          ?? LEGACY_SHARED_LAYOUT_KEYS
+          ?? legacySharedLayoutKeys
             .filter((key) => key !== layoutStorageKey)
             .map((key) => loadColumnLayout(key))
             .find(Boolean)
@@ -208,7 +255,7 @@ export default function MyLeadsPage({
     } catch (error) {
       console.error('Failed to fetch shared layout:', error);
       const fallbackLayout = loadColumnLayout(layoutStorageKey)
-        ?? LEGACY_SHARED_LAYOUT_KEYS
+        ?? legacySharedLayoutKeys
           .filter((key) => key !== layoutStorageKey)
           .map((key) => loadColumnLayout(key))
           .find(Boolean)
@@ -218,7 +265,7 @@ export default function MyLeadsPage({
       setLayoutReady(true);
       setLayoutHydrated(true);
     }
-  }, [applyStoredLayout, layoutStorageKey]);
+  }, [applyStoredLayout, layoutStorageKey, legacySharedLayoutKeys]);
 
   useEffect(() => {
     fetchData();
@@ -317,17 +364,13 @@ export default function MyLeadsPage({
       {
         colId: 'actions',
         headerName: 'Actions',
-        width: 100,
+        width: 86,
         pinned: 'right',
         cellRenderer: (params: ICellRendererParams) => (
-          params.node.rowPinned === 'bottom' ? null : (
-          <button
-            onClick={() => setLeadPendingDelete(params.data.id)}
-            className="p-1 hover:bg-rose-500/20 text-rose-500 rounded transition-colors mt-1"
-          >
-            <Trash2 size={16} />
-          </button>
-          )
+          <ActionsCellRenderer
+            {...params}
+            onDelete={(id) => setLeadPendingDelete(id)}
+          />
         )
       }
     ];
@@ -571,6 +614,23 @@ export default function MyLeadsPage({
     return undefined;
   }, []);
 
+  const handleRowDragEnd = useCallback((event: RowDragEndEvent<GridLead>) => {
+    const orderedIds: number[] = [];
+
+    event.api.forEachNode((node) => {
+      if (!node.rowPinned && node.data) {
+        orderedIds.push(Number(node.data.id));
+      }
+    });
+
+    void apiClient.put('/leads/reorder', {
+      leadIds: orderedIds,
+    }).catch((error) => {
+      console.error('Row reorder failed:', error);
+      fetchData();
+    });
+  }, [fetchData]);
+
   return (
     <div className="p-6 h-full flex flex-col space-y-4 animate-in fade-in duration-500">
       <ConfirmDialog
@@ -630,6 +690,8 @@ export default function MyLeadsPage({
           rowData={filteredRowData}
           pinnedBottomRowData={pinnedBottomRowData}
           columnDefs={visibleColumnDefs}
+          getRowId={(params) => String(params.data.id)}
+          rowDragManaged={true}
           undoRedoCellEditing={true}
           undoRedoCellEditingLimit={20}
           suppressCellFocus={false}
@@ -642,6 +704,7 @@ export default function MyLeadsPage({
             updateSelectedCellPreview(event);
             void onCellValueChanged(event);
           }}
+          onRowDragEnd={handleRowDragEnd}
           onColumnMoved={(event: ColumnMovedEvent) => {
             if (!event.finished) return;
 

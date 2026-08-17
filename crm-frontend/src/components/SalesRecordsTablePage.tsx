@@ -31,6 +31,7 @@ import LeadDateFilter from './LeadDateFilter';
 import { filterItemsByDate, type LeadDateFilter as DateFilterValue } from '../utils/leadDateFilter';
 import { formatDateDisplay, formatRowTimestampTooltip } from '../utils/date';
 import { handleGridCellCopy } from '../utils/gridClipboard';
+import { getSelectedCompanyId } from '../utils/company';
 import { normalizeUsPhoneForStorage } from '../utils/phone';
 import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../utils/columnLayout';
 
@@ -114,7 +115,7 @@ interface SalesRecordsTablePageProps {
 }
 
 export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePageProps) {
-  const layoutStorageKey = `crm:${mode}-client-journeys`;
+  const layoutStorageKey = `crm:${mode}-client-journeys:company:${getSelectedCompanyId()}`;
   const [rowData, setRowData] = useState<GridClientJourney[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteLoading, setDeleteLoading] = useState(false);

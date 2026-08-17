@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import apiClient from '../api/client';
 import { Loader2, Mail, Lock, LayoutDashboard, Eye, EyeOff } from 'lucide-react';
 import { motion } from 'motion/react';
+import { syncSelectedCompanyForUser } from '../utils/company';
 
 const REMEMBERED_IDENTIFIER_KEY = 'crm:remembered-identifier';
 
@@ -50,6 +51,7 @@ export default function Login() {
       localStorage.setItem('user', JSON.stringify(userWithRole));
 
       const role = userWithRole.role?.type || userWithRole.role?.name?.toLowerCase();
+      syncSelectedCompanyForUser(userWithRole, role === 'admin' ? 'admin' : 'employee');
 
       if (role === 'admin') {
         navigate('/admin/leads');

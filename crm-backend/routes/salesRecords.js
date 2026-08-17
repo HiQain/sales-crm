@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, authorizeCompanyAccess } from '../middleware/auth.js';
 import {
   createSalesRecord,
   deleteSalesRecord,
@@ -9,9 +9,11 @@ import {
 
 const router = express.Router();
 
-router.get('/', authenticate, getSalesRecords);
-router.post('/', authenticate, createSalesRecord);
-router.put('/:id', authenticate, updateSalesRecord);
-router.delete('/:id', authenticate, deleteSalesRecord);
+router.use(authenticate, authorizeCompanyAccess);
+
+router.get('/', getSalesRecords);
+router.post('/', createSalesRecord);
+router.put('/:id', updateSalesRecord);
+router.delete('/:id', deleteSalesRecord);
 
 export default router;

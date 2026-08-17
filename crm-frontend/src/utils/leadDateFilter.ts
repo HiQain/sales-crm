@@ -3,12 +3,14 @@ import type { Lead } from '../types';
 export const LEAD_DATE_FILTERS = [
   { value: 'all', label: 'All time' },
   { value: 'last7Days', label: 'Last 7 days' },
+  { value: 'last15Days', label: 'Last 15 days' },
+  { value: 'last30Days', label: 'Last 30 days' },
   { value: 'last3Months', label: 'Last 3 months' },
   { value: 'last6Months', label: 'Last 6 months' },
-  { value: 'thisMonth', label: 'This month' },
   { value: 'lastMonth', label: 'Last month' },
-  { value: 'thisYear', label: 'This year' },
   { value: 'lastYear', label: 'Last year' },
+  { value: 'thisMonth', label: 'This month' },
+  { value: 'thisYear', label: 'This year' },
 ] as const;
 
 export type LeadDateFilter = (typeof LEAD_DATE_FILTERS)[number]['value'];
@@ -18,6 +20,14 @@ const DAY_IN_MS = 24 * 60 * 60 * 1000;
 const resolveDateFilter = (date: Date, filter: LeadDateFilter, now: Date) => {
   if (filter === 'last7Days') {
     return date.getTime() >= now.getTime() - (7 * DAY_IN_MS);
+  }
+
+  if (filter === 'last15Days') {
+    return date.getTime() >= now.getTime() - (15 * DAY_IN_MS);
+  }
+
+  if (filter === 'last30Days') {
+    return date.getTime() >= now.getTime() - (30 * DAY_IN_MS);
   }
 
   if (filter === 'last3Months') {

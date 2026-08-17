@@ -32,6 +32,7 @@ import LeadDateFilter from './LeadDateFilter';
 import { filterItemsByDate, type LeadDateFilter as DateFilterValue } from '../utils/leadDateFilter';
 import { formatDateDisplay, formatRowTimestampTooltip } from '../utils/date';
 import { handleGridCellCopy } from '../utils/gridClipboard';
+import { getSelectedCompanyId } from '../utils/company';
 import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, saveColumnLayout } from '../utils/columnLayout';
 
 ModuleRegistry.registerModules([AllEnterpriseModule]);
@@ -108,7 +109,7 @@ interface BillingTablePageProps {
 }
 
 export default function BillingTablePage({ mode }: BillingTablePageProps) {
-  const layoutStorageKey = `crm:${mode}-billings`;
+  const layoutStorageKey = `crm:${mode}-billings:company:${getSelectedCompanyId()}`;
   const [rowData, setRowData] = useState<GridBilling[]>([]);
   const [loading, setLoading] = useState(true);
   const [deleteLoading, setDeleteLoading] = useState(false);

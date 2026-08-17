@@ -1,6 +1,14 @@
-import { CreditCard, LogOut, Route, Target, Users } from 'lucide-react';
+import { Check, ChevronDown, CreditCard, LogOut, Route, Target, Users } from 'lucide-react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import apiClient from '../api/client';
+import {
+  getAccessibleCompanies,
+  getSelectedCompanyId,
+  setSelectedCompanyId,
+  syncSelectedCompanyForUser,
+  type CompanyId,
+} from '../utils/company';
 
 interface TopNavProps {
   role: 'admin' | 'employee';
@@ -8,10 +16,15 @@ interface TopNavProps {
 
 export default function TopNav({ role }: TopNavProps) {
   const navigate = useNavigate();
-  const userStr = localStorage.getItem('user');
-  const user = userStr ? JSON.parse(userStr) : null;
+  const [user, setUser] = useState<any>(() => {
+    const userStr = localStorage.getItem('user');
+    return userStr ? JSON.parse(userStr) : null;
+  });
   const [menuOpen, setMenuOpen] = useState(false);
+  const [companyMenuOpen, setCompanyMenuOpen] = useState(false);
+  const [selectedCompanyId, setSelectedCompany] = useState<CompanyId>(() => getSelectedCompanyId());
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const companyMenuRef = useRef<HTMLDivElement | null>(null);
 
   const basePath = role === 'admin' ? '/admin' : '/employee';
 
@@ -28,10 +41,45 @@ export default function TopNav({ role }: TopNavProps) {
   const displayName = user?.username || user?.name || 'User';
   const displayRole = role === 'admin' ? 'Admin' : 'Employee';
   const displayEmail = user?.email || `${String(displayName).toLowerCase()}@hiqain.com`;
+  const accessibleCompanies = useMemo(
+    () => getAccessibleCompanies(user, role),
+    [role, user],
+  );
+  const selectedCompany = accessibleCompanies.find((company) => company.id === selectedCompanyId)
+    ?? accessibleCompanies[0];
+  const canSwitchCompanies = role === 'admin' || accessibleCompanies.length > 1;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    apiClient.get('/auth/me').then((response) => {
+      if (cancelled) return;
+
+      const refreshedUser = response.data;
+      localStorage.setItem('user', JSON.stringify(refreshedUser));
+      const nextCompanyId = syncSelectedCompanyForUser(refreshedUser, role);
+      setUser(refreshedUser);
+
+      if (nextCompanyId !== selectedCompanyId) {
+        setSelectedCompany(nextCompanyId);
+        window.location.reload();
+      }
+    }).catch((error) => {
+      console.error('Failed to refresh company access:', error);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [role, selectedCompanyId]);
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) {
         setMenuOpen(false);
+      }
+      if (!companyMenuRef.current?.contains(event.target as Node)) {
+        setCompanyMenuOpen(false);
       }
     };
 
@@ -45,14 +93,69 @@ export default function TopNav({ role }: TopNavProps) {
     navigate('/login');
   };
 
+  const handleCompanyChange = (companyId: CompanyId) => {
+    if (!accessibleCompanies.some((company) => company.id === companyId)) return;
+
+    setCompanyMenuOpen(false);
+    if (companyId === selectedCompanyId) return;
+
+    setSelectedCompanyId(companyId);
+    setSelectedCompany(companyId);
+    window.location.reload();
+  };
+
   return (
     <header className="sticky top-0 z-50 flex h-14 items-center gap-6 border-b border-white/10 bg-[#141a2b] px-4 text-white shadow-sm">
-      <NavLink to={`${basePath}/leads`} className="mr-2 flex shrink-0 items-center gap-2">
-        <div className="flex h-7 w-7 items-center justify-center rounded bg-indigo-600">
-          <Target className="h-4 w-4 text-white" />
-        </div>
-        <span className="text-base font-bold tracking-tight text-white">HiqainCRM</span>
-      </NavLink>
+      <div ref={companyMenuRef} className="relative mr-2 shrink-0">
+        <button
+          type="button"
+          onClick={canSwitchCompanies ? () => setCompanyMenuOpen((current) => !current) : undefined}
+          aria-haspopup={canSwitchCompanies ? 'listbox' : undefined}
+          aria-expanded={companyMenuOpen}
+          className={`flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors ${
+            canSwitchCompanies ? 'hover:bg-white/8 focus:outline-none focus:ring-2 focus:ring-indigo-400' : 'cursor-default'
+          }`}
+        >
+          <div className="flex h-7 w-7 items-center justify-center rounded bg-indigo-600">
+            <Target className="h-4 w-4 text-white" />
+          </div>
+          <span className="text-base font-bold tracking-tight text-white">{selectedCompany.brandLabel}</span>
+          {canSwitchCompanies ? (
+            <ChevronDown className={`h-4 w-4 text-white/60 transition-transform ${companyMenuOpen ? 'rotate-180' : ''}`} />
+          ) : null}
+        </button>
+
+        {companyMenuOpen && canSwitchCompanies ? (
+          <div
+            role="listbox"
+            aria-label="Select company"
+            className="absolute left-0 top-full z-50 mt-2 w-56 rounded-xl border border-slate-200 bg-white p-2 text-slate-700 shadow-xl"
+          >
+            <div className="px-3 pb-2 pt-1 text-[11px] font-bold uppercase tracking-widest text-slate-500">
+              Select Company
+            </div>
+            {accessibleCompanies.map((company) => {
+              const selected = company.id === selectedCompanyId;
+
+              return (
+                <button
+                  key={company.id}
+                  type="button"
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => handleCompanyChange(company.id)}
+                  className={`flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left text-sm font-semibold transition-colors ${
+                    selected ? 'bg-indigo-50 text-indigo-700' : 'hover:bg-slate-100'
+                  }`}
+                >
+                  <span>{company.name}</span>
+                  {selected ? <Check className="h-4 w-4 text-indigo-600" strokeWidth={2.5} /> : null}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
 
       <nav className="scrollbar-none flex flex-1 items-center gap-1 overflow-x-auto">
         {navItems.map((item) => {

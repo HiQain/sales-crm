@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getSelectedCompanyId } from '../utils/company';
 
 const rawApiBaseURL = import.meta.env.VITE_API_URL || '/api';
 const apiBaseURL = rawApiBaseURL.endsWith('/api')
@@ -14,6 +15,7 @@ apiClient.interceptors.request.use((config) => {
   if (jwt) {
     config.headers.Authorization = `Bearer ${jwt}`;
   }
+  config.headers['X-Company-Id'] = String(getSelectedCompanyId());
   return config;
 });
 

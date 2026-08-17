@@ -1,5 +1,6 @@
 import db from '../config/db.js';
 import jwt from 'jsonwebtoken';
+import { attachCompaniesToUser } from '../utils/userCompanies.js';
 
 export const login = async (req, res) => {
   const { identifier, password } = req.body;
@@ -31,11 +32,12 @@ export const login = async (req, res) => {
     );
 
     const { password: _, ...userWithoutPass } = user;
+    const userWithCompanies = await attachCompaniesToUser(db, userWithoutPass);
 
     res.json({
       jwt: token,
       user: {
-        ...userWithoutPass,
+        ...userWithCompanies,
         role: { name: user.role_name, type: user.role_type }
       }
     });
@@ -47,21 +49,31 @@ export const login = async (req, res) => {
 
 export const register = async (req, res) => {
   const { username, email, password } = req.body;
+  const connection = await db.getConnection();
 
   try {
-    const [existing] = await db.execute(
+    await connection.beginTransaction();
+
+    const [existing] = await connection.execute(
       'SELECT id FROM users WHERE email = ? OR username = ?',
       [email, username]
     );
 
     if (existing.length > 0) {
+      await connection.rollback();
       return res.status(400).json({ error: { message: 'User already exists' } });
     }
 
-    const [result] = await db.execute(
+    const [result] = await connection.execute(
       'INSERT INTO users (username, email, password, role_id) VALUES (?, ?, ?, ?)',
       [username, email, password, 2] // 2 = Employee by default
     );
+
+    await connection.execute(
+      'INSERT INTO user_company_access (user_id, company_id) VALUES (?, ?)',
+      [result.insertId, 1],
+    );
+    await connection.commit();
 
     const token = jwt.sign(
       { id: result.insertId, username, role: 'employee' },
@@ -75,12 +87,17 @@ export const register = async (req, res) => {
         id: result.insertId,
         username,
         email,
+        company_ids: [1],
+        companies: [{ id: 1, code: 'HIQAIN', name: 'Hiqain' }],
         role: { name: 'Employee', type: 'employee' }
       }
     });
   } catch (err) {
+    await connection.rollback();
     console.error(err);
     res.status(500).json({ error: { message: 'Registration failed' } });
+  } finally {
+    connection.release();
   }
 };
 
@@ -100,9 +117,10 @@ export const getMe = async (req, res) => {
 
     const user = rows[0];
     const { password: _, ...userData } = user;
+    const userWithCompanies = await attachCompaniesToUser(db, userData);
 
     res.json({
-      ...userData,
+      ...userWithCompanies,
       role: { name: user.role_name, type: user.role_type }
     });
   } catch (err) {

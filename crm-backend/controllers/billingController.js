@@ -1,5 +1,6 @@
 import db from '../config/db.js';
 import { buildClientJourneyFromBilling } from '../services/billingSync.js';
+import { getCompanyId } from '../utils/company.js';
 
 const BILLING_FIELDS = [
   'invoice_date',
@@ -100,8 +101,8 @@ const serializeBilling = (billing) => ({
 const syncClientJourneyFromBilling = async (connection, billing) => {
   const journey = buildClientJourneyFromBilling(billing);
   const [existingJourneys] = await connection.execute(
-    'SELECT id FROM client_journeys WHERE billing_id = ? LIMIT 1',
-    [billing.id],
+    'SELECT id FROM client_journeys WHERE billing_id = ? AND company_id = ? LIMIT 1',
+    [billing.id, billing.company_id],
   );
 
   if (existingJourneys.length > 0) {
@@ -109,7 +110,7 @@ const syncClientJourneyFromBilling = async (connection, billing) => {
       UPDATE client_journeys
       SET record_date = ?, client_name = ?, business_name = ?, credit_card_info = ?, email = ?, phone = ?,
           sales = ?, \`lead\` = ?, service = ?, status = ?, paid = ?, balance = ?, total = ?, assigned_user = ?
-      WHERE billing_id = ?
+      WHERE billing_id = ? AND company_id = ?
     `, [
       journey.record_date,
       journey.client_name,
@@ -126,16 +127,18 @@ const syncClientJourneyFromBilling = async (connection, billing) => {
       journey.total,
       journey.assigned_user,
       billing.id,
+      billing.company_id,
     ]);
     return;
   }
 
   await connection.execute(`
     INSERT INTO client_journeys
-    (lead_id, billing_id, record_date, client_name, business_name, credit_card_info, email, phone,
+    (company_id, lead_id, billing_id, record_date, client_name, business_name, credit_card_info, email, phone,
      sales, \`lead\`, service, status, paid, balance, total, assigned_user, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
+    billing.company_id,
     null,
     billing.id,
     journey.record_date,
@@ -158,10 +161,11 @@ const syncClientJourneyFromBilling = async (connection, billing) => {
 
 export const getBillings = async (req, res) => {
   const { userId } = req.query;
+  const companyId = getCompanyId(req);
 
   try {
-    let query = 'SELECT * FROM billings WHERE 1=1';
-    const params = [];
+    let query = 'SELECT * FROM billings WHERE company_id = ?';
+    const params = [companyId];
 
     if (userId) {
       query += ' AND assigned_user = ?';
@@ -179,6 +183,7 @@ export const getBillings = async (req, res) => {
 };
 
 export const createBilling = async (req, res) => {
+  const companyId = getCompanyId(req);
   const payload = normalizeBillingPayload({
     ...pickBillingFields(req.body),
     assigned_user: req.body.assigned_user || req.user.id,
@@ -190,10 +195,11 @@ export const createBilling = async (req, res) => {
 
     const [result] = await connection.execute(`
       INSERT INTO billings
-      (invoice_date, payment_received_date, client_name, business_name, payment_method,
+      (company_id, invoice_date, payment_received_date, client_name, business_name, payment_method,
        service, amount, fee_deduction, net_currency, \`lead\`, assigned_user, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
+      companyId,
       payload.invoice_date || null,
       payload.payment_received_date || null,
       payload.client_name || '',
@@ -210,6 +216,7 @@ export const createBilling = async (req, res) => {
 
     await syncClientJourneyFromBilling(connection, {
       id: result.insertId,
+      company_id: companyId,
       ...payload,
       created_by: req.user.id,
     });
@@ -218,6 +225,7 @@ export const createBilling = async (req, res) => {
 
     res.status(201).json({
       id: result.insertId,
+      company_id: companyId,
       ...serializeBilling(payload),
     });
   } catch (err) {
@@ -231,6 +239,7 @@ export const createBilling = async (req, res) => {
 
 export const updateBilling = async (req, res) => {
   const { id } = req.params;
+  const companyId = getCompanyId(req);
   const rawUpdates = pickBillingFields(req.body);
 
   if (Object.keys(rawUpdates).length === 0) {
@@ -243,8 +252,8 @@ export const updateBilling = async (req, res) => {
     await connection.beginTransaction();
 
     const [rows] = await connection.execute(
-      'SELECT * FROM billings WHERE id = ? LIMIT 1',
-      [id]
+      'SELECT * FROM billings WHERE id = ? AND company_id = ? LIMIT 1',
+      [id, companyId]
     );
     if (rows.length === 0) {
       await connection.rollback();
@@ -254,8 +263,8 @@ export const updateBilling = async (req, res) => {
     const updates = normalizeBillingPayload(rawUpdates, rows[0]);
     const setClause = Object.keys(updates).map((key) => `${quoteColumn(key)} = ?`).join(', ');
     await connection.execute(
-      `UPDATE billings SET ${setClause} WHERE id = ?`,
-      [...Object.values(updates), id],
+      `UPDATE billings SET ${setClause} WHERE id = ? AND company_id = ?`,
+      [...Object.values(updates), id, companyId],
     );
 
     await syncClientJourneyFromBilling(connection, {
@@ -278,12 +287,23 @@ export const updateBilling = async (req, res) => {
 
 export const deleteBilling = async (req, res) => {
   const { id } = req.params;
+  const companyId = getCompanyId(req);
   const connection = await db.getConnection();
 
   try {
     await connection.beginTransaction();
-    await connection.execute('DELETE FROM client_journeys WHERE billing_id = ?', [id]);
-    await connection.execute('DELETE FROM billings WHERE id = ?', [id]);
+    await connection.execute(
+      'DELETE FROM client_journeys WHERE billing_id = ? AND company_id = ?',
+      [id, companyId],
+    );
+    const [result] = await connection.execute(
+      'DELETE FROM billings WHERE id = ? AND company_id = ?',
+      [id, companyId],
+    );
+    if (result.affectedRows === 0) {
+      await connection.rollback();
+      return res.status(404).json({ error: { message: 'Billing not found' } });
+    }
     await connection.commit();
     res.json({ message: 'Billing deleted successfully' });
   } catch (err) {
