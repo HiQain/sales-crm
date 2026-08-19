@@ -72,7 +72,7 @@ export default function UsersPage() {
           {users.map((user) => (
             <div
               key={user.id}
-              className="group relative flex items-center gap-6 overflow-hidden rounded-2xl border border-white/30 bg-white/40 p-5 shadow-sm backdrop-blur-[20px] transition-all hover:border-white/40 hover:bg-white/50"
+              className="group relative flex items-center gap-6 overflow-hidden rounded-2xl border border-white/30 bg-white/40 p-3 shadow-sm backdrop-blur-[20px] transition-all hover:border-white/40 hover:bg-white/50"
             >
               <div className="absolute inset-0 bg-slate-100/40 opacity-0 transition-opacity group-hover:opacity-100" />
               <div className="relative z-10 flex h-16 w-16 items-center justify-center rounded-2xl border border-indigo-500/20 bg-indigo-600/10 text-indigo-600 shadow-inner transition-transform group-hover:scale-105">

@@ -79,6 +79,13 @@ body {
   --ag-header-column-separator-color: rgba(255, 255, 255, 0.1) !important;
 }
 
+/* Keep the selected cell's right edge above inline column-divider styles. */
+.ag-cell.ag-cell-range-right,
+.ag-cell.ag-cell-range-single-cell,
+.ag-cell.ag-cell-focus:not(.ag-cell-range-selected):focus-within {
+  border-right-color: var(--ag-range-selection-border-color) !important;
+}
+
 /* Custom scrollbar for glass effect */
 ::-webkit-scrollbar {
   width: 8px;
