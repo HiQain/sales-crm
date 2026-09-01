@@ -217,7 +217,27 @@ router.put('/:id/employee-visibility', authenticate, async (req, res) => {
 
 // Delete user
 router.delete('/:id', authenticate, async (req, res) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ error: { message: 'Forbidden' } });
+  }
+
   try {
+    const [users] = await db.execute(`
+      SELECT u.id, r.type AS role_type
+      FROM users u
+      INNER JOIN roles r ON r.id = u.role_id
+      WHERE u.id = ?
+      LIMIT 1
+    `, [req.params.id]);
+
+    if (users.length === 0) {
+      return res.status(404).json({ error: { message: 'User not found' } });
+    }
+
+    if (users[0].role_type === 'admin') {
+      return res.status(400).json({ error: { message: 'Administrator accounts cannot be deleted' } });
+    }
+
     await db.execute('DELETE FROM users WHERE id = ?', [req.params.id]);
     res.json({ message: 'User deleted successfully' });
   } catch (err) {

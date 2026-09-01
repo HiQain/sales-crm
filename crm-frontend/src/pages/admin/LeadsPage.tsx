@@ -20,7 +20,7 @@ import {
 } from 'ag-grid-community';
 import { AllEnterpriseModule } from 'ag-grid-enterprise';
 import apiClient from '../../api/client';
-import { CalendarPlus, Check, ChevronDown, GripVertical, Loader2, Plus, Search, Trash2, Users, X } from 'lucide-react';
+import { CalendarPlus, Check, ChevronDown, GripVertical, Loader2, Plus, Search, Trash2, Upload, Users, X } from 'lucide-react';
 import { Lead, User } from '../../types';
 import ColumnVisibilityMenu, { getColumnVisibilityId } from '../../components/ColumnVisibilityMenu';
 import ConfirmDialog from '../../components/ConfirmDialog';
@@ -39,12 +39,13 @@ import { handleGridCellCopy } from '../../utils/gridClipboard';
 import { getSelectedCompanyId } from '../../utils/company';
 import { normalizeUsPhoneForStorage } from '../../utils/phone';
 import { loadColumnLayout, mergeOrderedIds, mergeVisibleIds, type StoredColumnLayout } from '../../utils/columnLayout';
+import UploadLeadsModal from '../../components/UploadLeadsModal';
 
 ModuleRegistry.registerModules([AllEnterpriseModule]);
 
 type GridLead = Lead & { __isDraft?: boolean; [key: string]: unknown };
 type EmployeeOption = Pick<User, 'id' | 'username'>;
-type VisibilityUser = Pick<User, 'id' | 'username' | 'email' | 'role_type'> & {
+type VisibilityUser = Pick<User, 'id' | 'username' | 'email' | 'role_type' | 'company_ids'> & {
   visible_employee_count?: number;
   visible_to_employees?: boolean;
 };
@@ -313,6 +314,7 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const [targetEmployeeIdsByUserId, setTargetEmployeeIdsByUserId] = useState<Record<number, number[]>>({});
   const [shareRulesByUserId, setShareRulesByUserId] = useState<Record<number, ShareRule>>({});
   const [visibilityLoading, setVisibilityLoading] = useState(false);
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
 
   const canManageEmployeeLead = useCallback((lead: GridLead) => {
     const assignedUserId = getAssignedUserId(lead);
@@ -483,6 +485,12 @@ export default function LeadsPage({ userId }: { userId?: string }) {
   const targetUsers = useMemo(
     () => usersForVisibility.filter((entry) => entry.role_type === 'employee' && Number(entry.id) !== currentUserId),
     [currentUserId, usersForVisibility],
+  );
+  const importUsers = useMemo(
+    () => usersForVisibility.filter((entry) => (
+      entry.role_type === 'employee' && (entry.company_ids ?? []).map(Number).includes(companyId)
+    )),
+    [companyId, usersForVisibility],
   );
   const selectedSourceUsers = useMemo(
     () => sourceUsers.filter((entry) => selectedSourceUserIds.includes(Number(entry.id))),
@@ -1373,6 +1381,12 @@ export default function LeadsPage({ userId }: { userId?: string }) {
 
   return (
     <div className="p-2 h-full flex flex-col space-y-2 animate-in fade-in duration-500">
+      <UploadLeadsModal
+        open={isAdmin && uploadModalOpen}
+        users={importUsers}
+        onClose={() => setUploadModalOpen(false)}
+        onImported={fetchData}
+      />
       {isAdmin && visibilityModalOpen && (
         <div className="fixed inset-0 z-[110] overflow-y-auto bg-slate-900/35 p-2 pt-16 backdrop-blur-[2px] sm:p-4 sm:pt-20">
           <div className="mx-auto flex max-h-[calc(100vh-4.5rem)] w-full max-w-[700px] flex-col overflow-hidden rounded-lg border border-slate-200 bg-[linear-gradient(180deg,#ffffff_0%,#f8fafc_100%)] shadow-2xl sm:max-h-[calc(100vh-6rem)]">
@@ -1685,20 +1699,30 @@ export default function LeadsPage({ userId }: { userId?: string }) {
             <input
               type="text"
               placeholder="Search leads..."
-              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-md text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-72 shadow-sm transition-all"
+              className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-md text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-56 shadow-sm transition-all"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
             />
           </div>
           {isAdmin && (
-            <button
-              type="button"
-              onClick={openVisibilityModal}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 shadow-sm transition-all hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <Users size={18} className="text-slate-500" />
-              <span>Share Leads</span>
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setUploadModalOpen(true)}
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 shadow-sm transition-all hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <Upload size={18} className="text-slate-500" />
+                <span>Upload Leads</span>
+              </button>
+              <button
+                type="button"
+                onClick={openVisibilityModal}
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 shadow-sm transition-all hover:bg-indigo-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <Users size={18} className="text-slate-500" />
+                <span>Share Leads</span>
+              </button>
+            </>
           )}
           <button
             type="button"

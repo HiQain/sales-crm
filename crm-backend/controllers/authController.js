@@ -2,6 +2,8 @@ import db from '../config/db.js';
 import jwt from 'jsonwebtoken';
 import { attachCompaniesToUser } from '../utils/userCompanies.js';
 
+const ALLOWED_REGISTRATION_ROLES = new Set(['admin', 'employee']);
+
 export const login = async (req, res) => {
   const { identifier, password } = req.body;
 
@@ -48,11 +50,41 @@ export const login = async (req, res) => {
 };
 
 export const register = async (req, res) => {
-  const { username, email, password } = req.body;
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ error: { message: 'Only administrators can create users' } });
+  }
+
+  const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  const requestedRole = typeof req.body?.role === 'string'
+    ? req.body.role.trim().toLowerCase()
+    : 'employee';
+
+  if (!username || !email || !password) {
+    return res.status(400).json({ error: { message: 'Name, email, and password are required' } });
+  }
+
+  if (!ALLOWED_REGISTRATION_ROLES.has(requestedRole)) {
+    return res.status(400).json({ error: { message: 'Role must be admin or employee' } });
+  }
+
   const connection = await db.getConnection();
 
   try {
     await connection.beginTransaction();
+
+    const [roles] = await connection.execute(
+      'SELECT id, name, type FROM roles WHERE type = ? LIMIT 1',
+      [requestedRole],
+    );
+
+    if (roles.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ error: { message: 'Selected role is not available' } });
+    }
+
+    const selectedRole = roles[0];
 
     const [existing] = await connection.execute(
       'SELECT id FROM users WHERE email = ? OR username = ?',
@@ -66,30 +98,36 @@ export const register = async (req, res) => {
 
     const [result] = await connection.execute(
       'INSERT INTO users (username, email, password, role_id) VALUES (?, ?, ?, ?)',
-      [username, email, password, 2] // 2 = Employee by default
+      [username, email, password, selectedRole.id],
     );
 
-    await connection.execute(
-      'INSERT INTO user_company_access (user_id, company_id) VALUES (?, ?)',
-      [result.insertId, 1],
+    const [companies] = await connection.execute(
+      requestedRole === 'admin'
+        ? 'SELECT id, code, name FROM companies ORDER BY id ASC'
+        : 'SELECT id, code, name FROM companies WHERE id = ? LIMIT 1',
+      requestedRole === 'admin' ? [] : [1],
     );
+
+    if (requestedRole === 'employee') {
+      await connection.execute(
+        'INSERT INTO user_company_access (user_id, company_id) VALUES (?, ?)',
+        [result.insertId, 1],
+      );
+    }
+
     await connection.commit();
 
-    const token = jwt.sign(
-      { id: result.insertId, username, role: 'employee' },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
-
     res.status(201).json({
-      jwt: token,
       user: {
         id: result.insertId,
         username,
         email,
-        company_ids: [1],
-        companies: [{ id: 1, code: 'HIQAIN', name: 'Hiqain' }],
-        role: { name: 'Employee', type: 'employee' }
+        role_id: Number(selectedRole.id),
+        role_name: selectedRole.name,
+        role_type: selectedRole.type,
+        company_ids: companies.map((company) => Number(company.id)),
+        companies: companies.map((company) => ({ ...company, id: Number(company.id) })),
+        role: { name: selectedRole.name, type: selectedRole.type },
       }
     });
   } catch (err) {

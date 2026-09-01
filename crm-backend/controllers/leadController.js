@@ -1,6 +1,11 @@
 import db from '../config/db.js';
 import { getCompanyId } from '../utils/company.js';
 import { isPhoneBlank, normalizeUsPhoneForStorage } from '../utils/phone.js';
+import {
+  buildRoundRobinAssignments,
+  MAX_LEAD_IMPORT_ROWS,
+  normalizeImportedLead,
+} from '../services/leadImport.js';
 
 const serializeLead = (lead) => {
   const normalizedContact = normalizeUsPhoneForStorage(lead.contact);
@@ -292,6 +297,125 @@ export const createLead = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to create lead' } });
+  }
+};
+
+export const importLeads = async (req, res) => {
+  if (!isAdmin(req.user)) {
+    return res.status(403).json({ error: { message: 'Only administrators can import and distribute leads' } });
+  }
+
+  const sourceLeads = Array.isArray(req.body?.leads) ? req.body.leads : [];
+  const requestedUserIds = Array.isArray(req.body?.userIds) ? req.body.userIds : [];
+  const userIds = Array.from(new Set(
+    requestedUserIds
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0),
+  ));
+
+  if (sourceLeads.length === 0) {
+    return res.status(400).json({ error: { message: 'The spreadsheet does not contain any leads' } });
+  }
+
+  if (sourceLeads.length > MAX_LEAD_IMPORT_ROWS) {
+    return res.status(400).json({ error: { message: `A single import can contain up to ${MAX_LEAD_IMPORT_ROWS} leads` } });
+  }
+
+  if (requestedUserIds.length === 0 || userIds.length !== requestedUserIds.length) {
+    return res.status(400).json({ error: { message: 'Select one or more valid users for distribution' } });
+  }
+
+  if (userIds.length > 500) {
+    return res.status(400).json({ error: { message: 'A single distribution can include up to 500 users' } });
+  }
+
+  let normalizedLeads;
+  try {
+    normalizedLeads = sourceLeads.map((lead, index) => normalizeImportedLead(lead, index + 2));
+  } catch (validationError) {
+    return res.status(400).json({
+      error: { message: validationError instanceof Error ? validationError.message : 'The spreadsheet contains invalid data' },
+    });
+  }
+
+  const companyId = getCompanyId(req);
+  const connection = await db.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const userPlaceholders = userIds.map(() => '?').join(', ');
+    const [eligibleUsers] = await connection.execute(`
+      SELECT u.id, u.username
+      FROM users u
+      INNER JOIN roles r ON r.id = u.role_id
+      INNER JOIN user_company_access access ON access.user_id = u.id AND access.company_id = ?
+      WHERE u.id IN (${userPlaceholders}) AND r.type = 'employee'
+    `, [companyId, ...userIds]);
+
+    const eligibleUsersById = new Map(eligibleUsers.map((user) => [Number(user.id), user]));
+    const selectedUsers = userIds.map((userId) => eligibleUsersById.get(userId)).filter(Boolean);
+
+    if (selectedUsers.length !== userIds.length) {
+      await connection.rollback();
+      return res.status(400).json({
+        error: { message: 'One or more selected users are not eligible for the active company' },
+      });
+    }
+
+    const [sortOrderRows] = await connection.execute(
+      'SELECT COALESCE(MAX(sort_order), 0) AS maxSortOrder FROM leads WHERE company_id = ? FOR UPDATE',
+      [companyId],
+    );
+    const maxSortOrder = Number(sortOrderRows[0]?.maxSortOrder ?? 0);
+    const { assignments, summary } = buildRoundRobinAssignments(normalizedLeads.length, selectedUsers);
+    const chunkSize = 250;
+
+    for (let chunkStart = 0; chunkStart < normalizedLeads.length; chunkStart += chunkSize) {
+      const chunk = normalizedLeads.slice(chunkStart, chunkStart + chunkSize);
+      const valuePlaceholders = chunk.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+      const values = chunk.flatMap((lead, chunkIndex) => {
+        const leadIndex = chunkStart + chunkIndex;
+        const assignedUser = assignments[leadIndex];
+
+        return [
+          companyId,
+          lead.contact,
+          lead.email,
+          lead.business_owner,
+          lead.business_name,
+          lead.source,
+          lead.service,
+          lead.notes,
+          maxSortOrder + leadIndex + 1,
+          lead.lead_value,
+          assignedUser.username,
+          lead.lead_status,
+          assignedUser.id,
+          req.user.id,
+        ];
+      });
+
+      await connection.execute(`
+        INSERT INTO leads
+          (company_id, contact, email, business_owner, business_name, source, service, notes,
+           sort_order, lead_value, \`lead\`, lead_status, assigned_user, created_by)
+        VALUES ${valuePlaceholders}
+      `, values);
+    }
+
+    await connection.commit();
+    return res.status(201).json({
+      message: `${normalizedLeads.length} leads imported and distributed successfully`,
+      importedCount: normalizedLeads.length,
+      assignments: summary,
+    });
+  } catch (err) {
+    await connection.rollback();
+    console.error(err);
+    return res.status(500).json({ error: { message: 'Failed to import and distribute leads' } });
+  } finally {
+    connection.release();
   }
 };
 
