@@ -6,6 +6,7 @@ import {
   MAX_LEAD_IMPORT_ROWS,
   normalizeImportedLead,
 } from '../services/leadImport.js';
+import { removeDownstreamForLead, syncDownstreamForLead } from '../services/leadSync.js';
 
 const serializeLead = (lead) => {
   const normalizedContact = normalizeUsPhoneForStorage(lead.contact);
@@ -261,16 +262,20 @@ export const createLead = async (req, res) => {
     is_date_marker, marker_date, lead_value, lead, lead_status, assigned_user
   } = payload;
 
+  const connection = await db.getConnection();
+
   try {
+    await connection.beginTransaction();
+
     const sortOrderQuery = is_date_marker
       ? 'SELECT COALESCE(MIN(sort_order), 1) AS edgeSortOrder FROM leads WHERE company_id = ?'
       : 'SELECT COALESCE(MAX(sort_order), 0) AS edgeSortOrder FROM leads WHERE company_id = ?';
-    const [sortOrderRows] = await db.execute(sortOrderQuery, [companyId]);
+    const [sortOrderRows] = await connection.execute(sortOrderQuery, [companyId]);
     const edgeSortOrder = Number(sortOrderRows[0]?.edgeSortOrder ?? (is_date_marker ? 1 : 0));
     const nextSortOrder = is_date_marker ? edgeSortOrder - 1 : edgeSortOrder + 1;
 
-    const [result] = await db.execute(`
-      INSERT INTO leads 
+    const [result] = await connection.execute(`
+      INSERT INTO leads
       (company_id, contact, email, business_owner, business_name, source, service, notes,
        is_date_marker, marker_date, sort_order, lead_value, \`lead\`, lead_status, assigned_user, created_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -292,11 +297,19 @@ export const createLead = async (req, res) => {
       Object.prototype.hasOwnProperty.call(payload, 'assigned_user') ? assigned_user ?? null : req.user.id,
       req.user.id
     ]);
-    const [rows] = await db.execute('SELECT * FROM leads WHERE id = ? AND company_id = ? LIMIT 1', [result.insertId, companyId]);
-    res.status(201).json(serializeLead(rows[0] ?? { id: result.insertId, company_id: companyId, ...payload }));
+    const [rows] = await connection.execute('SELECT * FROM leads WHERE id = ? AND company_id = ? LIMIT 1', [result.insertId, companyId]);
+
+    const createdLead = rows[0] ?? { id: result.insertId, company_id: companyId, created_by: req.user.id, ...payload };
+    await syncDownstreamForLead(connection, createdLead);
+
+    await connection.commit();
+    res.status(201).json(serializeLead(createdLead));
   } catch (err) {
+    await connection.rollback();
     console.error(err);
     res.status(500).json({ error: { message: 'Failed to create lead' } });
+  } finally {
+    connection.release();
   }
 };
 
@@ -396,12 +409,39 @@ export const importLeads = async (req, res) => {
         ];
       });
 
-      await connection.execute(`
+      const [insertResult] = await connection.execute(`
         INSERT INTO leads
           (company_id, contact, email, business_owner, business_name, source, service, notes,
            sort_order, lead_value, \`lead\`, lead_status, assigned_user, created_by)
         VALUES ${valuePlaceholders}
       `, values);
+
+      // Mirror each imported lead into Billings and Client Journeys.
+      // A single multi-row INSERT yields consecutive auto-increment ids starting at insertId.
+      const firstInsertedId = Number(insertResult.insertId);
+      const importedAt = new Date();
+      for (let chunkIndex = 0; chunkIndex < chunk.length; chunkIndex += 1) {
+        const leadIndex = chunkStart + chunkIndex;
+        const sourceLead = chunk[chunkIndex];
+        const assignedUser = assignments[leadIndex];
+
+        await syncDownstreamForLead(connection, {
+          id: firstInsertedId + chunkIndex,
+          company_id: companyId,
+          contact: sourceLead.contact,
+          email: sourceLead.email,
+          business_owner: sourceLead.business_owner,
+          business_name: sourceLead.business_name,
+          service: sourceLead.service,
+          lead_value: sourceLead.lead_value,
+          lead: assignedUser.username,
+          lead_status: sourceLead.lead_status,
+          assigned_user: assignedUser.id,
+          created_by: req.user.id,
+          created_at: importedAt,
+          is_date_marker: 0,
+        });
+      }
     }
 
     await connection.commit();
@@ -451,10 +491,28 @@ export const updateLead = async (req, res) => {
       }
     }
 
-    const setClause = Object.keys(updates).map(key => `\`${key}\` = ?`).join(', ');
-    const values = [...Object.values(updates), id, companyId];
+    const connection = await db.getConnection();
 
-    await db.execute(`UPDATE leads SET ${setClause} WHERE id = ? AND company_id = ?`, values);
+    try {
+      await connection.beginTransaction();
+
+      const setClause = Object.keys(updates).map(key => `\`${key}\` = ?`).join(', ');
+      const values = [...Object.values(updates), id, companyId];
+
+      await connection.execute(`UPDATE leads SET ${setClause} WHERE id = ? AND company_id = ?`, values);
+
+      const [rows] = await connection.execute('SELECT * FROM leads WHERE id = ? AND company_id = ? LIMIT 1', [id, companyId]);
+      if (rows[0]) {
+        await syncDownstreamForLead(connection, rows[0]);
+      }
+
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
 
     res.json({ message: 'Lead updated successfully' });
   } catch (err) {
@@ -476,9 +534,23 @@ export const deleteLead = async (req, res) => {
       return res.status(403).json({ error: { message: 'Forbidden' } });
     }
 
-    await db.execute('DELETE FROM leads WHERE id = ? AND company_id = ?', [id, companyId]);
+    const connection = await db.getConnection();
+
+    try {
+      await connection.beginTransaction();
+      await removeDownstreamForLead(connection, id, companyId);
+      await connection.execute('DELETE FROM leads WHERE id = ? AND company_id = ?', [id, companyId]);
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+
     res.json({ message: 'Lead deleted successfully' });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: { message: 'Failed to delete lead' } });
   }
 };

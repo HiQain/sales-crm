@@ -367,11 +367,29 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
         loading={deleteLoading}
       />
 
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-700 tracking-tight">
-            {mode === 'admin' ? 'Billings' : 'My Billings'}
-          </h2>
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
+        <h2 className="text-2xl font-bold text-slate-700 tracking-tight whitespace-nowrap">
+          {mode === 'admin' ? 'Billings' : 'My Billings'}
+        </h2>
+
+        <div className="flex flex-1 flex-wrap items-center gap-2 xl:justify-center">
+          {[
+            { label: 'Total Billings', val: stats.totalBillings, icon: Table, color: 'text-indigo-600' },
+            { label: 'Payments Received', val: stats.receivedPayments, icon: CreditCard, color: 'text-green-700' },
+            { label: 'Gross Amount', val: `$${stats.grossAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: DollarSign, color: 'text-sky-700' },
+            { label: 'Net Currency', val: `$${stats.netAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: BadgeDollarSign, color: 'text-emerald-700' },
+          ].map((stat) => (
+            <div key={stat.label} className="bg-white/40 backdrop-blur-[20px] border border-white/30 px-3 py-1.5 rounded-xl flex items-center gap-2.5 shadow-sm relative overflow-hidden group">
+              <div className="absolute inset-0 bg-slate-100/40 opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className={`p-1.5 rounded-lg bg-white/40 border border-white/50 ${stat.color} relative z-10`}>
+                <stat.icon size={16} />
+              </div>
+              <div className="relative z-10">
+                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">{stat.label}</p>
+                <p className={`text-sm font-bold ${stat.color} whitespace-nowrap`}>{stat.val}</p>
+              </div>
+            </div>
+          ))}
         </div>
 
         <div className="flex flex-wrap items-center gap-3 md:justify-end">
@@ -398,26 +416,6 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
           />
           <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {[
-          { label: 'Total Billings', val: stats.totalBillings, icon: Table, color: 'text-indigo-600' },
-          { label: 'Payments Received', val: stats.receivedPayments, icon: CreditCard, color: 'text-green-700' },
-          { label: 'Gross Amount', val: `$${stats.grossAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: DollarSign, color: 'text-sky-700' },
-          { label: 'Net Currency', val: `$${stats.netAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: BadgeDollarSign, color: 'text-emerald-700' },
-        ].map((stat) => (
-          <div key={stat.label} className="bg-white/40 backdrop-blur-[20px] border border-white/30 p-4 rounded-2xl flex items-center gap-4 shadow-sm relative overflow-hidden group">
-            <div className="absolute inset-0 bg-slate-100/40 opacity-0 group-hover:opacity-100 transition-opacity" />
-            <div className={`p-2 rounded-xl bg-white/40 border border-white/50 ${stat.color} relative z-10`}>
-              <stat.icon size={24} />
-            </div>
-            <div className="relative z-10">
-              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{stat.label}</p>
-              <p className={`text-xl font-bold ${stat.color}`}>{stat.val}</p>
-            </div>
-          </div>
-        ))}
       </div>
 
       <div className="flex-1 bg-white/40 backdrop-blur-[20px] border border-white/30 rounded-2xl shadow-xl overflow-hidden min-h-[400px] relative">

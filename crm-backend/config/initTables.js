@@ -1,5 +1,6 @@
 import db from './db.js';
 import { buildClientJourneyFromBilling } from '../services/billingSync.js';
+import { syncDownstreamForLead } from '../services/leadSync.js';
 import { normalizeUsPhoneForStorage } from '../utils/phone.js';
 
 const normalizeStoredPhones = async ({ table, idColumn, phoneColumn }) => {
@@ -467,5 +468,36 @@ export const ensureTables = async () => {
       clientJourney.assigned_user,
       billing.created_by || billing.assigned_user || null,
     ]);
+  }
+
+  // Reconcile: a lead mirrors into Billings and Client Journeys (one-way, keyed by lead_id)
+  // ONLY while its status is paid. Seed paid leads that are missing their downstream rows, and
+  // remove lead-linked rows for leads that are no longer paid. Date markers and manually-created
+  // billings/journeys (lead_id IS NULL) are left untouched.
+  const [leadsToReconcile] = await db.execute(`
+    SELECT l.*
+    FROM leads l
+    LEFT JOIN client_journeys cj ON cj.lead_id = l.id AND cj.company_id = l.company_id
+    WHERE l.is_date_marker = 0
+      AND (
+        (LOWER(TRIM(l.lead_status)) = 'paid' AND cj.id IS NULL)
+        OR (LOWER(TRIM(l.lead_status)) <> 'paid' AND cj.id IS NOT NULL)
+      )
+  `);
+
+  if (leadsToReconcile.length > 0) {
+    const connection = await db.getConnection();
+    try {
+      await connection.beginTransaction();
+      for (const lead of leadsToReconcile) {
+        await syncDownstreamForLead(connection, lead);
+      }
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
   }
 };

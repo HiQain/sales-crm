@@ -1,3 +1,5 @@
+import { toDateOnly } from '../utils/date.js';
+
 export const buildBillingFromLead = (lead) => {
   const amount = Number(lead.lead_value) || 0;
   const feeDeduction = Number(lead.fee_deduction) || 0;
@@ -25,21 +27,6 @@ export const buildBillingFromLead = (lead) => {
     lead: lead.lead || '',
     assigned_user: lead.assigned_user ?? null,
   };
-};
-
-const toDateOnly = (value) => {
-  if (!value) return null;
-
-  if (value instanceof Date) {
-    return value.toISOString().slice(0, 10);
-  }
-
-  const parsed = new Date(value);
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toISOString().slice(0, 10);
-  }
-
-  return null;
 };
 
 export const buildClientJourneyFromBilling = (billing) => {

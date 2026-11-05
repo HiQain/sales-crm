@@ -1,6 +1,7 @@
 import db from '../config/db.js';
 import { buildClientJourneyFromBilling } from '../services/billingSync.js';
 import { getCompanyId } from '../utils/company.js';
+import { toDateOnly } from '../utils/date.js';
 
 const BILLING_FIELDS = [
   'invoice_date',
@@ -31,31 +32,6 @@ const pickBillingFields = (payload) => {
 const toMoney = (value) => {
   const number = Number(value);
   return Number.isFinite(number) ? number : 0;
-};
-
-const toDateOnly = (value) => {
-  if (!value) return null;
-
-  if (value instanceof Date) {
-    return value.toISOString().slice(0, 10);
-  }
-
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-
-    const directMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
-    if (directMatch) {
-      return directMatch[1];
-    }
-
-    const parsed = new Date(trimmed);
-    if (!Number.isNaN(parsed.getTime())) {
-      return parsed.toISOString().slice(0, 10);
-    }
-  }
-
-  return null;
 };
 
 const quoteColumn = (column) => `\`${column}\``;

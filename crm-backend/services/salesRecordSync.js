@@ -1,3 +1,5 @@
+import { toDateOnly } from '../utils/date.js';
+
 const LEAD_TO_SALES_FIELD_MAP = {
   business_owner: 'client_name',
   business_name: 'business_name',
@@ -34,21 +36,6 @@ export const buildLeadFromSalesPayload = (salesRecord) => ({
   lead_status: salesRecord.status || 'pending',
   assigned_user: salesRecord.assigned_user,
 });
-
-const toDateOnly = (value) => {
-  if (!value) return null;
-
-  if (value instanceof Date) {
-    return value.toISOString().slice(0, 10);
-  }
-
-  const parsed = new Date(value);
-  if (!Number.isNaN(parsed.getTime())) {
-    return parsed.toISOString().slice(0, 10);
-  }
-
-  return null;
-};
 
 export const buildClientJourneyFromLead = (lead) => {
   const total = Number(lead.lead_value) || 0;
