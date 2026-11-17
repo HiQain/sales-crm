@@ -8,6 +8,7 @@ import userRoutes from './routes/users.js';
 import leadRoutes from './routes/leads.js';
 import salesRecordRoutes from './routes/salesRecords.js';
 import billingRoutes from './routes/billings.js';
+import clientRoutes from './routes/clients.js';
 import { ensureTables } from './config/initTables.js';
 
 dotenv.config();
@@ -54,6 +55,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/leads', leadRoutes);
 app.use('/api/client-journeys', salesRecordRoutes);
 app.use('/api/billings', billingRoutes);
+app.use('/api/clients', clientRoutes);
 
 app.use(express.static(frontendDistPath));
 

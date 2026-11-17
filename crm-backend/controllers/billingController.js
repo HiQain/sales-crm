@@ -1,6 +1,7 @@
 import db from '../config/db.js';
 import { buildClientJourneyFromBilling } from '../services/billingSync.js';
 import { getCompanyId } from '../utils/company.js';
+import { linkJourneyClientByBillingId } from '../services/clients.js';
 import { toDateOnly } from '../utils/date.js';
 
 const BILLING_FIELDS = [
@@ -140,15 +141,19 @@ export const getBillings = async (req, res) => {
   const companyId = getCompanyId(req);
 
   try {
-    let query = 'SELECT * FROM billings WHERE company_id = ?';
+    // Show the linked client's name so renames and moves appear here too.
+    let query = `SELECT b.*, COALESCE(c.name, b.client_name) AS client_name
+      FROM billings b
+      LEFT JOIN clients c ON c.id = b.client_id AND c.company_id = b.company_id
+      WHERE b.company_id = ?`;
     const params = [companyId];
 
     if (userId) {
-      query += ' AND assigned_user = ?';
+      query += ' AND b.assigned_user = ?';
       params.push(userId);
     }
 
-    query += ' ORDER BY COALESCE(invoice_date, created_at) DESC, id DESC';
+    query += ' ORDER BY COALESCE(b.invoice_date, b.created_at) DESC, b.id DESC';
 
     const [billings] = await db.execute(query, params);
     res.json(billings.map(serializeBilling));
@@ -196,6 +201,7 @@ export const createBilling = async (req, res) => {
       ...payload,
       created_by: req.user.id,
     });
+    await linkJourneyClientByBillingId(connection, companyId, result.insertId, { userId: req.user.id });
 
     await connection.commit();
 
@@ -247,6 +253,11 @@ export const updateBilling = async (req, res) => {
       ...rows[0],
       ...updates,
       id: Number(id),
+    });
+    // Typing another client name on a billing moves it (and its journey) to that client.
+    await linkJourneyClientByBillingId(connection, companyId, Number(id), {
+      relinkByName: 'client_name' in updates,
+      userId: req.user.id,
     });
 
     await connection.commit();

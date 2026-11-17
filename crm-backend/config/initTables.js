@@ -1,6 +1,7 @@
 import db from './db.js';
 import { buildClientJourneyFromBilling } from '../services/billingSync.js';
 import { syncDownstreamForLead } from '../services/leadSync.js';
+import { backfillClientLinks } from '../services/clients.js';
 import { normalizeUsPhoneForStorage } from '../utils/phone.js';
 
 const normalizeStoredPhones = async ({ table, idColumn, phoneColumn }) => {
@@ -417,6 +418,28 @@ export const ensureTables = async () => {
     await db.execute('ALTER TABLE billings CHANGE COLUMN agent `lead` VARCHAR(255) NOT NULL DEFAULT \'\'');
   }
 
+  // Clients: the parent record that Client Journey rows, Billings and Leads link to by client_id.
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS clients (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      company_id INT NOT NULL DEFAULT 1,
+      name VARCHAR(255) NOT NULL DEFAULT '',
+      created_by INT NULL,
+      last_used_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_clients_company_name (company_id, name)
+    )
+  `);
+
+  for (const table of ['client_journeys', 'billings', 'leads']) {
+    const [clientIdColumn] = await db.execute(`SHOW COLUMNS FROM ${table} LIKE 'client_id'`);
+    if (clientIdColumn.length === 0) {
+      await db.execute(`ALTER TABLE ${table} ADD COLUMN client_id INT NULL`);
+      await db.execute(`ALTER TABLE ${table} ADD INDEX idx_${table}_client_id (client_id)`);
+    }
+  }
+
   const [billingsMissingClientName] = await db.execute(`
     SELECT b.id, l.contact, l.business_owner
     FROM billings b
@@ -500,4 +523,7 @@ export const ensureTables = async () => {
       connection.release();
     }
   }
+
+  // Link any rows that are not yet attached to a client (existing data on first run).
+  await backfillClientLinks(db);
 };

@@ -22,12 +22,12 @@ const toDisplayDate = (value: unknown): Date | null => {
 
 export const formatDateDisplay = (value: unknown) => {
   const parsed = toDisplayDate(value);
-  return parsed ? format(parsed, 'dd-MMMM-yy') : '';
+  return parsed ? format(parsed, 'dd-MMM-yy') : '';
 };
 
 export const formatDateTimeDisplay = (value: unknown) => {
   const parsed = toDisplayDate(value);
-  return parsed ? format(parsed, 'dd-MMMM-yy h:mm a') : '';
+  return parsed ? format(parsed, 'dd-MMM-yy h:mm a') : '';
 };
 
 export const formatRowTimestampTooltip = (row: {

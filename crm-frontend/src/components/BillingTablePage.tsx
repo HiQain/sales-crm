@@ -356,7 +356,7 @@ export default function BillingTablePage({ mode }: BillingTablePageProps) {
   }, [filteredRowData]);
 
   return (
-    <div className="p-6 h-full flex flex-col space-y-4 animate-in fade-in duration-500">
+    <div className="p-2 h-full flex flex-col space-y-4 animate-in fade-in duration-500">
       <ConfirmDialog
         open={billingPendingDelete != null}
         title="Delete billing?"

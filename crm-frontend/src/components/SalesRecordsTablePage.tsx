@@ -16,15 +16,22 @@ import {
 } from 'ag-grid-community';
 import { AllEnterpriseModule } from 'ag-grid-enterprise';
 import {
-  CheckCircle,
   Loader2,
+  Plus,
   Search,
-  Table,
   Trash2,
-  TrendingUp,
 } from 'lucide-react';
 import apiClient from '../api/client';
-import type { ClientJourney } from '../types';
+import type { ClientJourney, ClientOption } from '../types';
+import ClientDetailsTable from './ClientDetailsTable';
+import { MoveJourneyDialog, RenameClientDialog } from './ClientActionDialogs';
+import { buildClientOptions } from '../utils/clients';
+import ClientJourneyModal, {
+  emptyJourneyRow,
+  type ClientJourneyFormValues,
+  type ClientJourneyModalInitialValues,
+  type JourneySuggestions,
+} from './ClientJourneyModal';
 import ColumnVisibilityMenu, { getColumnVisibilityId } from './ColumnVisibilityMenu';
 import ConfirmDialog from './ConfirmDialog';
 import LeadDateFilter from './LeadDateFilter';
@@ -127,6 +134,14 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
   const [visibleColumnIds, setVisibleColumnIds] = useState<string[]>([]);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({});
   const [layoutReady, setLayoutReady] = useState(false);
+  const [view, setView] = useState<'journeys' | 'details'>('journeys');
+  const [journeyModal, setJourneyModal] = useState<{
+    mode: 'create' | 'edit';
+    recordId?: number;
+    initialValues?: ClientJourneyModalInitialValues;
+  } | null>(null);
+  const [recordToMove, setRecordToMove] = useState<ClientJourney | null>(null);
+  const [clientToRename, setClientToRename] = useState<ClientOption | null>(null);
 
   const user = useMemo(() => {
     const userStr = localStorage.getItem('user');
@@ -157,6 +172,98 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Clients (grouped by client_id) for the dialog picker and the Client Details view.
+  const clientOptions = useMemo(() => buildClientOptions(rowData), [rowData]);
+
+  const journeySuggestions = useMemo<JourneySuggestions>(() => {
+    const collect = (values: unknown[], defaults: string[] = []) => {
+      const seen = new Map<string, string>();
+      [...defaults, ...values].forEach((value) => {
+        const text = String(value ?? '').trim();
+        if (text && !seen.has(text.toLowerCase())) seen.set(text.toLowerCase(), text);
+      });
+      return [...seen.values()].sort((a, b) => a.localeCompare(b));
+    };
+    return {
+      sales: collect(rowData.map((record) => record.sales)),
+      lead: collect(rowData.map((record) => record.lead)),
+      service: collect(rowData.map((record) => record.service)),
+      status: collect(rowData.map((record) => record.status), ['pending', 'paid']),
+    };
+  }, [rowData]);
+
+  const submitJourneys = useCallback(async (values: ClientJourneyFormValues) => {
+    if (journeyModal?.mode === 'edit' && journeyModal.recordId != null) {
+      const recordId = journeyModal.recordId;
+      const updates = {
+        client_name: values.client_name,
+        client_id: values.client_id,
+        ...values.records[0],
+      };
+      const response = await apiClient.put(`/client-journeys/${recordId}`, updates);
+      // The server may have linked the row to another client; use what it decided.
+      const linked = {
+        client_id: response.data?.client_id ?? null,
+        client_name: response.data?.client_name ?? values.client_name,
+      };
+      setRowData((current) => current.map((record) => (
+        record.id === recordId ? withDerivedJourneyValues({ ...record, ...updates, ...linked }) : record
+      )));
+    } else {
+      const response = await apiClient.post('/client-journeys/bulk', {
+        ...values,
+        assigned_user: scopedUserId,
+      });
+      const created = (response.data as GridClientJourney[]).map(withDerivedJourneyValues);
+      setRowData((current) => [...created, ...current]);
+    }
+    setJourneyModal(null);
+  }, [journeyModal, scopedUserId]);
+
+  const openEditJourney = useCallback((record: ClientJourney) => {
+    setJourneyModal({
+      mode: 'edit',
+      recordId: record.id,
+      initialValues: {
+        client_name: record.client_name,
+        client_id: record.client_id ?? null,
+        rows: [{
+          record_date: toDateOnly(record.record_date),
+          business_name: record.business_name || '',
+          credit_card_info: record.credit_card_info || '',
+          email: record.email || '',
+          phone: record.phone || '',
+          sales: record.sales || '',
+          lead: record.lead || '',
+          service: record.service || '',
+          status: record.status || '',
+          paid: String(toMoney(record.paid)),
+          total: String(toMoney(record.total)),
+        }],
+      },
+    });
+  }, []);
+
+  const moveJourney = useCallback(async (target: { client_id: number } | { new_client_name: string }) => {
+    if (!recordToMove) return;
+    const response = await apiClient.post(`/client-journeys/${recordToMove.id}/move`, target);
+    const { client_id: clientId, client_name: clientName } = response.data as { client_id: number; client_name: string };
+    setRowData((current) => current.map((record) => (
+      record.id === recordToMove.id ? { ...record, client_id: clientId, client_name: clientName } : record
+    )));
+    setRecordToMove(null);
+  }, [recordToMove]);
+
+  const renameClient = useCallback(async (name: string) => {
+    if (!clientToRename?.id) return;
+    const clientId = clientToRename.id;
+    await apiClient.put(`/clients/${clientId}`, { name });
+    setRowData((current) => current.map((record) => (
+      record.client_id === clientId ? { ...record, client_name: name } : record
+    )));
+    setClientToRename(null);
+  }, [clientToRename]);
 
   const currencyFormatter = (params: ValueFormatterParams) => {
     if (params.value == null) return '$0.00';
@@ -346,11 +453,17 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
     event.api.refreshCells({ rowNodes: [node] });
 
     try {
-      await apiClient.put(`/client-journeys/${data.id}`, {
+      const response = await apiClient.put(`/client-journeys/${data.id}`, {
         ...(field === 'paid' || field === 'total'
           ? { [field]: nextValue, balance: normalizedNextRecord.balance }
           : { [field]: nextValue }),
       });
+      if (field === 'client_name' && response.data?.client_id) {
+        const { client_id: clientId, client_name: clientName } = response.data;
+        setRowData((current) => current.map((record) => (
+          record.id === data.id ? { ...record, client_id: clientId, client_name: clientName } : record
+        )));
+      }
     } catch (error) {
       console.error('Update failed:', error);
       fetchData();
@@ -373,16 +486,8 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
     return undefined;
   }, []);
 
-  const stats = useMemo(() => {
-    const totalRecords = filteredRowData.length;
-    const paidRecords = filteredRowData.filter(record => record.status === 'paid').length;
-    const paidRevenue = filteredRowData.reduce((acc, record) => acc + (Number(record.paid) || 0), 0);
-    const totalRevenue = filteredRowData.reduce((acc, record) => acc + (Number(record.total) || 0), 0);
-    return { totalRecords, paidRecords, paidRevenue, totalRevenue };
-  }, [filteredRowData]);
-
   return (
-    <div className="p-6 h-full flex flex-col space-y-4 animate-in fade-in duration-500">
+    <div className="p-2 h-full flex flex-col space-y-4 animate-in fade-in duration-500">
       <ConfirmDialog
         open={recordPendingDelete != null}
         title="Delete client journey?"
@@ -393,42 +498,71 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
         loading={deleteLoading}
       />
 
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
-        <h2 className="text-2xl font-bold text-slate-700 tracking-tight whitespace-nowrap">
-          {mode === 'admin' ? 'Client Journey' : 'My Clients'}
-        </h2>
+      <ClientJourneyModal
+        open={journeyModal != null}
+        mode={journeyModal?.mode ?? 'create'}
+        initialValues={journeyModal?.initialValues}
+        clients={clientOptions}
+        suggestions={journeySuggestions}
+        onCancel={() => setJourneyModal(null)}
+        onSubmit={submitJourneys}
+      />
 
-        <div className="flex flex-1 flex-wrap items-center gap-2 xl:justify-center">
-          {[
-            { label: 'Total Journeys', val: stats.totalRecords, icon: Table, color: 'text-indigo-600' },
-            { label: 'Paid Journeys', val: stats.paidRecords, icon: CheckCircle, color: 'text-green-700' },
-            { label: 'Paid Revenue', val: `$${stats.paidRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: CheckCircle, color: 'text-emerald-700' },
-            { label: 'Total Revenue', val: `$${stats.totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, icon: TrendingUp, color: 'text-indigo-700' },
-          ].map((stat) => (
-            <div key={stat.label} className="bg-white/40 backdrop-blur-[20px] border border-white/30 px-3 py-1.5 rounded-xl flex items-center gap-2.5 shadow-sm relative overflow-hidden group">
-              <div className="absolute inset-0 bg-slate-100/40 opacity-0 group-hover:opacity-100 transition-opacity" />
-              <div className={`p-1.5 rounded-lg bg-white/40 border border-white/50 ${stat.color} relative z-10`}>
-                <stat.icon size={16} />
-              </div>
-              <div className="relative z-10">
-                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">{stat.label}</p>
-                <p className={`text-sm font-bold ${stat.color} whitespace-nowrap`}>{stat.val}</p>
-              </div>
-            </div>
-          ))}
+      {recordToMove && (
+        <MoveJourneyDialog
+          record={recordToMove}
+          clients={clientOptions}
+          onCancel={() => setRecordToMove(null)}
+          onMove={moveJourney}
+        />
+      )}
+
+      {clientToRename && (
+        <RenameClientDialog
+          client={clientToRename}
+          onCancel={() => setClientToRename(null)}
+          onRename={renameClient}
+        />
+      )}
+
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="text-2xl font-bold text-slate-700 tracking-tight whitespace-nowrap">
+            {mode === 'admin' ? 'Client Journey' : 'My Clients'}
+          </h2>
+          <div role="tablist" aria-label="Client Journey view" className="inline-flex rounded-lg border border-slate-300 bg-white p-0.5 shadow-sm">
+            {([
+              { id: 'journeys', label: 'Journeys' },
+              { id: 'details', label: 'Client Details' },
+            ] as const).map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={view === tab.id}
+                onClick={() => setView(tab.id)}
+                className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${view === tab.id ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
+
+        <div className="hidden xl:block xl:flex-1" />
 
         <div className="flex flex-wrap items-center gap-3 md:justify-end">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-600 transition-colors" size={18} />
             <input
               type="text"
-              placeholder="Search client journeys..."
+              placeholder={view === 'details' ? 'Search clients...' : 'Search client journeys...'}
               className="bg-white border border-slate-300 pl-10 pr-4 py-2 rounded-md text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-56 shadow-sm transition-all"
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
             />
           </div>
+          {view === 'journeys' && (
           <ColumnVisibilityMenu
             columns={columnVisibilityOptions}
             visibleColumnIds={visibleColumnIds}
@@ -440,7 +574,16 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
               );
             }}
           />
-          <LeadDateFilter value={dateFilter} onChange={setDateFilter} />
+          )}
+          {view === 'journeys' && <LeadDateFilter value={dateFilter} onChange={setDateFilter} />}
+          <button
+            type="button"
+            onClick={() => setJourneyModal({ mode: 'create' })}
+            className="inline-flex h-[38px] items-center gap-2 rounded-md bg-indigo-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
+          >
+            <Plus size={16} />
+            Add Client Journeys
+          </button>
         </div>
       </div>
 
@@ -450,6 +593,27 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
             <Loader2 className="animate-spin text-indigo-600" size={32} />
           </div>
         )}
+        {view === 'details' ? (
+          <div className="h-full bg-white">
+            <ClientDetailsTable
+              records={rowData}
+              clients={clientOptions}
+              searchText={searchText}
+              onEdit={openEditJourney}
+              onDelete={(record) => setRecordPendingDelete(record.id)}
+              onMove={setRecordToMove}
+              onRenameClient={setClientToRename}
+              onAddForClient={(client) => setJourneyModal({
+                mode: 'create',
+                initialValues: {
+                  client_name: client.name,
+                  client_id: client.id,
+                  rows: [emptyJourneyRow()],
+                },
+              })}
+            />
+          </div>
+        ) : (
         <AgGridReact
           theme={glassTheme}
           rowData={filteredRowData}
@@ -503,6 +667,7 @@ export default function SalesRecordsTablePage({ mode }: SalesRecordsTablePagePro
           headerHeight={34}
           animateRows={true}
         />
+        )}
       </div>
     </div>
   );

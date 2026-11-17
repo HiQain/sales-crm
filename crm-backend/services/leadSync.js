@@ -3,6 +3,7 @@
 // Nothing flows back up to the lead.
 
 import { toDateOnly } from '../utils/date.js';
+import { linkJourneyClient } from './clients.js';
 
 const isPaidStatus = (status) => String(status ?? '').trim().toLowerCase() === 'paid';
 
@@ -193,5 +194,10 @@ export const syncDownstreamForLead = async (connection, lead) => {
   }
 
   const billingId = await upsertBillingFromLead(connection, lead);
-  await upsertClientJourneyFromLead(connection, lead, billingId);
+  const journeyId = await upsertClientJourneyFromLead(connection, lead, billingId);
+  // Links only once: an already-linked row keeps its client, and a re-paid lead reuses the
+  // client it remembers (leads.client_id).
+  await linkJourneyClient(connection, lead.company_id, journeyId, {
+    userId: lead.created_by ?? lead.assigned_user ?? null,
+  });
 };

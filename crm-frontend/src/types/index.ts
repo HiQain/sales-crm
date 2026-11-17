@@ -51,6 +51,7 @@ export interface ClientJourney {
   id: number;
   lead_id: number | null;
   billing_id?: number | null;
+  client_id?: number | null;
   record_date: string;
   client_name: string;
   business_name: string;
@@ -70,6 +71,19 @@ export interface ClientJourney {
 }
 
 export type SalesRecord = ClientJourney;
+
+// A client as shown in pickers and in Client Details. `id` is null for rows not yet linked.
+export interface ClientOption {
+  key: string;
+  id: number | null;
+  name: string;
+  // Extra detail to tell same-name clients apart (business, phone or email). Empty when the name is unique.
+  hint: string;
+  // 1, 2, 3... among clients with the same name (oldest first). Null when the name is unique.
+  nameNumber: number | null;
+  businesses: string[];
+  rowCount: number;
+}
 
 export interface Billing {
   id: number;

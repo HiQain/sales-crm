@@ -256,7 +256,7 @@ const formatMarkerDate = (dateValue: string) => {
   return {
     rawDate,
     markerLabel: new Intl.DateTimeFormat('en-US', {
-      month: 'long',
+      month: 'short',
       day: 'numeric',
       year: 'numeric',
     }).format(parsedDate),
